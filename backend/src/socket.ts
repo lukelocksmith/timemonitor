@@ -5,11 +5,13 @@ type SocketUser = {
   clickup_user_id?: string | null;
 };
 
+type SessionEntry = Record<string, unknown> & { user_id?: string };
+
 function canViewAll(user: SocketUser): boolean {
   return user.role === 'admin' || user.role === 'pm';
 }
 
-export function sendActiveSessionsToSocket(socket: Socket, sessions: Array<{ user_id?: string }>) {
+export function sendActiveSessionsToSocket(socket: Socket, sessions: SessionEntry[]) {
   const user = (socket.data.user || {}) as SocketUser;
 
   if (canViewAll(user)) {
@@ -27,13 +29,13 @@ export function sendActiveSessionsToSocket(socket: Socket, sessions: Array<{ use
   socket.emit('active_sessions', filtered);
 }
 
-export function emitActiveSessions(io: Server, sessions: Array<{ user_id?: string }>) {
+export function emitActiveSessions(io: Server, sessions: SessionEntry[]) {
   for (const socket of io.sockets.sockets.values()) {
     sendActiveSessionsToSocket(socket, sessions);
   }
 }
 
-export function emitScopedEvent(io: Server, event: string, payload: { user_id?: string }) {
+export function emitScopedEvent(io: Server, event: string, payload: SessionEntry) {
   for (const socket of io.sockets.sockets.values()) {
     const user = (socket.data.user || {}) as SocketUser;
     if (canViewAll(user)) {

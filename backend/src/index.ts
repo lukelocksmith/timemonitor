@@ -95,7 +95,7 @@ io.on('connection', (socket) => {
        WHERE te.end_time IS NULL
        ORDER BY te.start_time DESC`
     )
-    .all();
+    .all() as Array<Record<string, unknown> & { user_id?: string }>;
 
   sendActiveSessionsToSocket(socket, activeSessions);
 

@@ -107,7 +107,7 @@ adminRouter.put('/users/:id', (req: AuthenticatedRequest, res: Response) => {
 
   const { display_name, role, is_active, clickup_user_id } = req.body as UpdateUserRequest;
 
-  const updates: { display_name?: string; role?: string; is_active?: number } = {};
+  const updates: { display_name?: string; role?: string; is_active?: number; clickup_user_id?: string | null } = {};
 
   if (display_name !== undefined) {
     updates.display_name = display_name;

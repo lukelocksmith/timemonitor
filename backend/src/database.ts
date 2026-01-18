@@ -245,7 +245,7 @@ export function updateAppUser(
   updates: { display_name?: string; role?: string; is_active?: number; clickup_user_id?: string | null }
 ) {
   const setClauses: string[] = [];
-  const values: (string | number)[] = [];
+  const values: (string | number | null)[] = [];
 
   if (updates.display_name !== undefined) {
     setClauses.push('display_name = ?');
