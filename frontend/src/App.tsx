@@ -670,6 +670,7 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
     }
   }, [activeTab]);
 
+  // Socket.io connection - separate effect to avoid reconnections
   useEffect(() => {
     if (!token) return;
 
@@ -722,40 +723,38 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
       );
     });
 
-    const refreshHistory = () => {
-      const range = getHistoryRangeDates(historyRange);
-      const params = new URLSearchParams({
-        limit: String(historyLimit),
-      });
-      if (range) {
-        params.set('start', range.start);
-        params.set('end', range.end);
-      }
-
-      fetch(`${API_URL}/api/history?${params.toString()}`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      })
-        .then((res) => res.json())
-        .then((data) => setHistory(data.entries || []))
-        .catch(console.error);
-    };
-
-    const refreshUsers = () => {
-      fetch(`${API_URL}/api/stats/team?period=month`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      })
-        .then((res) => res.json())
-        .then((data) => setUsers(data.users || []))
-        .catch(console.error);
-    };
-
-    refreshHistory();
-    refreshUsers();
-
     return () => {
       newSocket.close();
     };
-  }, [token, logout, historyRange, historyLimit]);
+  }, [token, logout]);
+
+  // Fetch history and users - separate effect for data loading
+  useEffect(() => {
+    if (!token) return;
+
+    const range = getHistoryRangeDates(historyRange);
+    const params = new URLSearchParams({
+      limit: String(historyLimit),
+    });
+    if (range) {
+      params.set('start', range.start);
+      params.set('end', range.end);
+    }
+
+    fetch(`${API_URL}/api/history?${params.toString()}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then((res) => res.json())
+      .then((data) => setHistory(data.entries || []))
+      .catch(console.error);
+
+    fetch(`${API_URL}/api/stats/team?period=month`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then((res) => res.json())
+      .then((data) => setUsers(data.users || []))
+      .catch(console.error);
+  }, [token, historyRange, historyLimit]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
