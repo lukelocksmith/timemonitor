@@ -438,7 +438,7 @@ function LiveTab({
               <select
                 value={selectedUser || ''}
                 onChange={(e) => setSelectedUser(e.target.value || null)}
-                className="w-full sm:w-56 px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring bg-background text-foreground text-sm"
+                className="w-full sm:w-56 px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring bg-card text-foreground text-sm font-medium"
               >
                 <option value="">Wszyscy</option>
                 {users.map((user) => (
