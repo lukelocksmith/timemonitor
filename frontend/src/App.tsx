@@ -319,7 +319,7 @@ function HistoryEntry({ entry }: { entry: TimeEntry }) {
           <div className="text-right text-sm">
             <div className="flex items-baseline justify-end gap-2">
               {durationParts.hours && (
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="font-mono text-sm text-muted-foreground">
                   {durationParts.hours}
                 </span>
               )}
