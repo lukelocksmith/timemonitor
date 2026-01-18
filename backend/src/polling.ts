@@ -125,8 +125,60 @@ async function fetchTeamMembers(): Promise<Array<{ id: number; username: string 
   }
 }
 
+// Sync cache with database on startup (recover from restart)
+function syncCacheFromDatabase() {
+  const activeInDb = db
+    .prepare(
+      `SELECT id, task_id, task_name, task_url, user_id, user_name, user_email,
+              start_time, list_name, folder_name, space_name
+       FROM time_entries WHERE end_time IS NULL`
+    )
+    .all() as Array<{
+    id: string;
+    task_id: string;
+    task_name: string;
+    task_url: string;
+    user_id: string;
+    user_name: string;
+    user_email: string;
+    start_time: string;
+    list_name: string | null;
+    folder_name: string | null;
+    space_name: string | null;
+  }>;
+
+  for (const entry of activeInDb) {
+    // Convert DB entry to CachedTimer format
+    activeTimers.set(entry.id, {
+      id: entry.id,
+      task: {
+        id: entry.task_id,
+        name: entry.task_name,
+        url: entry.task_url,
+      },
+      user: {
+        id: parseInt(entry.user_id) || 0,
+        username: entry.user_name,
+        email: entry.user_email,
+        color: '',
+        profilePicture: null,
+      },
+      start: String(new Date(entry.start_time).getTime()),
+      duration: -1, // Active timer
+      list_name: entry.list_name,
+      folder_name: entry.folder_name,
+      space_name: entry.space_name,
+    });
+  }
+
+  console.log(`📥 [POLL] Załadowano ${activeInDb.length} aktywnych timerów z bazy`);
+}
+
 export function startPolling(io: Server) {
   console.log('🔄 Polling aktywnych timerów uruchomiony (co 30s)');
+
+  // Sync cache from database first (recover from restart)
+  syncCacheFromDatabase();
 
   const poll = async () => {
     const timers = await fetchAllRunningTimers();
@@ -226,6 +278,16 @@ export function startPolling(io: Server) {
         console.log(`⏹️ [POLL] ${timer.user.username} skończył: ${timer.task.name}`);
         activeTimers.delete(id);
 
+        // Fallback: jeśli webhook nie zadziałał, uzupełnij end_time i duration
+        const endTime = new Date().toISOString();
+        const startMs = Number.parseInt(timer.start, 10);
+        const durationMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        db.prepare(`
+          UPDATE time_entries
+          SET end_time = ?, duration = ?
+          WHERE id = ? AND (end_time IS NULL OR end_time = '')
+        `).run(endTime, durationMs, timer.id);
+
         // Webhook powinien zaktualizować bazę, więc tylko emitujemy
         emitScopedEvent(io, 'time_entry_stopped', {
           id: timer.id,
@@ -234,7 +296,7 @@ export function startPolling(io: Server) {
           user_id: String(timer.user.id),
           user_name: timer.user.username,
           user_color: timer.user.color,
-          end_time: new Date().toISOString(),
+          end_time: endTime,
           list_name: timer.list_name,
           folder_name: timer.folder_name,
           space_name: timer.space_name,
