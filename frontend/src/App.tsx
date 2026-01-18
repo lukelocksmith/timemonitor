@@ -57,37 +57,47 @@ interface TeamStats {
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 function formatDuration(ms: number): string {
-  if (!ms || ms <= 0) return '0m';
-  const seconds = Math.floor(ms / 1000);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
+  if (!ms || ms <= 0) return '0s';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return `${hours}h ${minutes}m ${seconds}s`;
   }
-  return `${minutes}m`;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
 
 function formatDurationLong(ms: number): string {
-  if (!ms || ms <= 0) return '0 m.';
-  const seconds = Math.floor(ms / 1000);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
+  if (!ms || ms <= 0) return '0 s.';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
   if (hours > 0) {
-    return `${hours} g. ${minutes} m.`;
+    return `${hours} g. ${minutes} m. ${seconds} s.`;
   }
-  return `${minutes} m.`;
+  if (minutes > 0) {
+    return `${minutes} m. ${seconds} s.`;
+  }
+  return `${seconds} s.`;
 }
 
-function formatDurationParts(ms?: number): { hours?: string; minutes: string } {
-  if (!ms || ms <= 0) return { minutes: '0m' };
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+function formatDurationParts(ms?: number): { hours?: string; minutes?: string; seconds: string } {
+  if (!ms || ms <= 0) return { seconds: '0s' };
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
   return {
     hours: hours > 0 ? `${hours}h` : undefined,
-    minutes: `${minutes}m`,
+    minutes: minutes > 0 || hours > 0 ? `${minutes}m` : undefined,
+    seconds: `${seconds}s`,
   };
 }
 
@@ -244,7 +254,7 @@ function ActiveSession({ entry }: { entry: TimeEntry }) {
   }, [entry.start_time]);
 
   return (
-    <Card className="border-l-4 border-l-primary active-pulse slide-in">
+    <Card className="border-0 border-l-4 border-l-primary active-pulse slide-in">
       <CardContent className="p-4">
         <div className="flex items-start gap-4">
           <Avatar name={entry.user_name} color={entry.user_color} avatar={entry.user_avatar} />
@@ -317,14 +327,19 @@ function HistoryEntry({ entry }: { entry: TimeEntry }) {
             </a>
           </div>
           <div className="text-right text-sm">
-            <div className="flex items-baseline justify-end gap-2">
+            <div className="flex items-baseline justify-end gap-1">
               {durationParts.hours && (
-                <span className="font-mono text-sm text-muted-foreground">
+                <span className="font-mono text-base font-semibold text-foreground">
                   {durationParts.hours}
                 </span>
               )}
-              <span className="font-mono text-[19px] leading-[24px] text-foreground">
-                {durationParts.minutes}
+              {durationParts.minutes && (
+                <span className="font-mono text-base font-semibold text-foreground">
+                  {durationParts.minutes}
+                </span>
+              )}
+              <span className="font-mono text-base font-semibold text-foreground">
+                {durationParts.seconds}
               </span>
             </div>
             <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
@@ -450,7 +465,7 @@ function LiveTab({
               <select
                 value={historyLimit}
                 onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10))}
-                className="px-2 py-2 rounded-md text-sm border border-border bg-card text-foreground"
+                className="px-3 py-2 rounded-md text-sm font-medium border border-border bg-card text-foreground"
               >
                 <option value={50}>50</option>
                 <option value={100}>100</option>
