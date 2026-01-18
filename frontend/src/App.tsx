@@ -254,7 +254,7 @@ function ActiveSession({ entry }: { entry: TimeEntry }) {
   }, [entry.start_time]);
 
   return (
-    <Card className="border-0 border-l-4 border-l-primary active-pulse slide-in">
+    <Card className="active-pulse slide-in">
       <CardContent className="p-4">
         <div className="flex items-start gap-4">
           <Avatar name={entry.user_name} color={entry.user_color} avatar={entry.user_avatar} />
