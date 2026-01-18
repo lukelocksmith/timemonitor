@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: clickup-monitor-backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DB_PATH=/app/data/activity.db
+      - CLICKUP_WEBHOOK_SECRET=${CLICKUP_WEBHOOK_SECRET:-}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+    volumes:
+      - activity-data:/app/data
+    networks:
+      - clickup-monitor
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_URL=
+    container_name: clickup-monitor-frontend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:80"
+    depends_on:
+      - backend
+    networks:
+      - clickup-monitor
+
+volumes:
+  activity-data:
+
+networks:
+  clickup-monitor:
+    driver: bridge
