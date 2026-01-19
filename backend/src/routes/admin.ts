@@ -197,3 +197,54 @@ adminRouter.post('/users/:id/reset-password', async (req: AuthenticatedRequest, 
 
   res.json({ message: 'Hasło zostało zresetowane' });
 });
+
+// POST /admin/fix-durations - Napraw wpisy z duration=0
+adminRouter.post('/fix-durations', (req: AuthenticatedRequest, res: Response) => {
+  const { db } = require('../database.js');
+
+  // Znajdź wpisy z duration=0 które mają start_time i end_time
+  const brokenEntries = db
+    .prepare(
+      `SELECT id, task_name, user_name, start_time, end_time, duration
+       FROM time_entries
+       WHERE (duration IS NULL OR duration = 0)
+         AND end_time IS NOT NULL
+         AND start_time IS NOT NULL`
+    )
+    .all() as Array<{
+    id: string;
+    task_name: string;
+    user_name: string;
+    start_time: string;
+    end_time: string;
+    duration: number | null;
+  }>;
+
+  if (brokenEntries.length === 0) {
+    return res.json({ message: 'Brak wpisów do naprawy', fixed: 0 });
+  }
+
+  // Napraw każdy wpis
+  const updateStmt = db.prepare('UPDATE time_entries SET duration = ? WHERE id = ?');
+  let fixed = 0;
+
+  for (const entry of brokenEntries) {
+    const startMs = new Date(entry.start_time).getTime();
+    const endMs = new Date(entry.end_time).getTime();
+
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+      const durationMs = endMs - startMs;
+      updateStmt.run(durationMs, entry.id);
+      fixed++;
+      console.log(
+        `🔧 Naprawiono: ${entry.user_name} - ${entry.task_name}: ${Math.round(durationMs / 1000 / 60)}min`
+      );
+    }
+  }
+
+  res.json({
+    message: `Naprawiono ${fixed} z ${brokenEntries.length} wpisów`,
+    fixed,
+    total: brokenEntries.length,
+  });
+});

@@ -12,7 +12,17 @@ export type EarningsUserRow = {
   entries_count: number;
 };
 
-export function EarningsByUser({ rows, isAdmin }: { rows: EarningsUserRow[]; isAdmin: boolean }) {
+export function EarningsByUser({
+  rows,
+  isAdmin,
+  showUserRate,
+}: {
+  rows: EarningsUserRow[];
+  isAdmin: boolean;
+  showUserRate: boolean;
+}) {
+  const showRate = isAdmin || showUserRate;
+
   return (
     <div className="bg-card rounded-2xl overflow-hidden border border-border">
       <div className="px-6 py-4 border-b border-border">
@@ -25,7 +35,7 @@ export function EarningsByUser({ rows, isAdmin }: { rows: EarningsUserRow[]; isA
               <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Osoba
               </th>
-              {isAdmin && (
+              {showRate && (
                 <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Stawka (PLN/h)
                 </th>
@@ -57,7 +67,7 @@ export function EarningsByUser({ rows, isAdmin }: { rows: EarningsUserRow[]; isA
                 <td className="px-6 py-4 whitespace-nowrap text-foreground font-medium">
                   {row.user_name}
                 </td>
-                {isAdmin && (
+                {showRate && (
                   <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">
                     {formatCurrencyPerHour(row.worker_rate || 0)}
                   </td>
@@ -85,7 +95,7 @@ export function EarningsByUser({ rows, isAdmin }: { rows: EarningsUserRow[]; isA
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 7 : 4} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={isAdmin ? 7 : showRate ? 5 : 4} className="px-6 py-8 text-center text-muted-foreground">
                   Brak danych dla wybranego okresu
                 </td>
               </tr>

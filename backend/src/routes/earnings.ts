@@ -292,6 +292,7 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
             `SELECT
               nw.clickup_user_id as user_id,
               nw.name as user_name,
+              nw.hourly_rate as worker_rate,
               ROUND(SUM(te.duration) / 3600000.0, 2) as hours_worked,
               ROUND(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 2) as profit,
               COUNT(te.id) as entries_count

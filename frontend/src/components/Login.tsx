@@ -49,7 +49,7 @@ export function Login() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 bg-background border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+              className="w-full px-4 py-3 bg-card border border-border rounded-lg text-foreground font-medium placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
               placeholder="Wpisz login"
               required
               autoFocus
@@ -65,7 +65,7 @@ export function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-background border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+              className="w-full px-4 py-3 bg-card border border-border rounded-lg text-foreground font-medium placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
               placeholder="Wpisz hasło"
               required
             />

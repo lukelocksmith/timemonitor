@@ -125,6 +125,24 @@ async function fetchTeamMembers(): Promise<Array<{ id: number; username: string 
   }
 }
 
+// Helper: parse date string to milliseconds (handles various formats)
+function parseStartTime(startTime: string): number {
+  // Try ISO format first
+  let parsed = new Date(startTime).getTime();
+  if (Number.isFinite(parsed)) return parsed;
+
+  // Try adding 'Z' for UTC if missing timezone
+  if (!startTime.includes('Z') && !startTime.includes('+')) {
+    // Replace space with 'T' if needed
+    const isoLike = startTime.replace(' ', 'T') + 'Z';
+    parsed = new Date(isoLike).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  console.warn(`⚠️ [POLL] Nie można sparsować daty: ${startTime}`);
+  return Date.now(); // Fallback to now (will result in 0 duration)
+}
+
 // Sync cache with database on startup (recover from restart)
 function syncCacheFromDatabase() {
   const activeInDb = db
@@ -148,6 +166,9 @@ function syncCacheFromDatabase() {
   }>;
 
   for (const entry of activeInDb) {
+    const startMs = parseStartTime(entry.start_time);
+    console.log(`📥 [POLL] Cache: ${entry.user_name} - start_time=${entry.start_time} -> ${startMs}ms`);
+
     // Convert DB entry to CachedTimer format
     activeTimers.set(entry.id, {
       id: entry.id,
@@ -163,7 +184,7 @@ function syncCacheFromDatabase() {
         color: '',
         profilePicture: null,
       },
-      start: String(new Date(entry.start_time).getTime()),
+      start: String(startMs),
       duration: -1, // Active timer
       list_name: entry.list_name,
       folder_name: entry.folder_name,
@@ -193,7 +214,7 @@ export function startPolling(io: Server) {
         const startTime = new Date(parseInt(timer.start)).toISOString();
         const taskDetails = await fetchClickUpTask(timer.task.id);
         const taskName = taskDetails?.name || timer.task.name;
-        const taskUrl = taskDetails?.url || timer.task.url;
+        const taskUrl = taskDetails?.url || timer.task.url || `https://app.clickup.com/t/${timer.task.id}`;
         const listName = taskDetails?.list?.name || null;
         const folderName = taskDetails?.folder?.name || null;
         const spaceName = taskDetails?.space?.name || null;
@@ -275,13 +296,28 @@ export function startPolling(io: Server) {
     // Timery które się zakończyły (były aktywne, teraz nie ma)
     for (const [id, timer] of activeTimers) {
       if (!currentIds.has(id)) {
-        console.log(`⏹️ [POLL] ${timer.user.username} skończył: ${timer.task.name}`);
         activeTimers.delete(id);
 
         // Fallback: jeśli webhook nie zadziałał, uzupełnij end_time i duration
         const endTime = new Date().toISOString();
-        const startMs = Number.parseInt(timer.start, 10);
+        let startMs = Number.parseInt(timer.start, 10);
+
+        // Debug: log the values
+        console.log(`⏹️ [POLL] ${timer.user.username} skończył: ${timer.task.name}`);
+        console.log(`   timer.start=${timer.start}, startMs=${startMs}, isFinite=${Number.isFinite(startMs)}`);
+
+        // If start is invalid, try to parse from DB
+        if (!Number.isFinite(startMs)) {
+          const dbEntry = db.prepare('SELECT start_time FROM time_entries WHERE id = ?').get(id) as { start_time: string } | undefined;
+          if (dbEntry?.start_time) {
+            startMs = parseStartTime(dbEntry.start_time);
+            console.log(`   Fallback: DB start_time=${dbEntry.start_time} -> ${startMs}ms`);
+          }
+        }
+
         const durationMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        console.log(`   Duration: ${Math.round(durationMs / 1000 / 60)}min (${durationMs}ms)`);
+
         db.prepare(`
           UPDATE time_entries
           SET end_time = ?, duration = ?
@@ -307,11 +343,13 @@ export function startPolling(io: Server) {
     // Wyślij aktualną listę aktywnych sesji do wszystkich klientów (z cache, który ma list info)
     const activeSessions = timers.map((t) => {
       const cached = activeTimers.get(t.id);
+      // Prioritize: API url > cached url > generated url
+      const taskUrl = t.task.url || cached?.task?.url || `https://app.clickup.com/t/${t.task.id}`;
       return {
         id: t.id,
         task_id: t.task.id,
         task_name: t.task.name,
-        task_url: t.task.url,
+        task_url: taskUrl,
         user_id: String(t.user.id),
         user_name: t.user.username,
         user_email: t.user.email,

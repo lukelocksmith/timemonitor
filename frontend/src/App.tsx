@@ -116,6 +116,14 @@ function formatDate(dateStr: string): string {
   });
 }
 
+function getTaskUrl(entry: TimeEntry): string | null {
+  if (entry.task_url) return entry.task_url;
+  if (entry.task_id) {
+    return `https://app.clickup.com/t/${entry.task_id}`;
+  }
+  return null;
+}
+
 function SunIcon({ className = 'h-4 w-4' }: { className?: string }) {
   return (
     <svg
@@ -244,6 +252,7 @@ function Avatar({ name, color, avatar, size = 'md' }: { name: string; color?: st
 
 function ActiveSession({ entry }: { entry: TimeEntry }) {
   const [elapsed, setElapsed] = useState(getElapsedTime(entry.start_time));
+  const taskUrl = getTaskUrl(entry);
   const taskLabel = stripListPrefix(entry.task_name, entry.list_name);
 
   useEffect(() => {
@@ -274,14 +283,20 @@ function ActiveSession({ entry }: { entry: TimeEntry }) {
                 </Badge>
               )}
             </div>
+            {taskUrl ? (
             <a
-              href={entry.task_url}
+                href={taskUrl}
               target="_blank"
               rel="noopener noreferrer"
             className="text-primary hover:underline font-medium truncate block mt-1"
             >
-              {taskLabel}
+                {taskLabel}
             </a>
+            ) : (
+              <span className="text-primary font-medium truncate block mt-1">
+                {taskLabel}
+              </span>
+            )}
           </div>
           <div className="text-right">
             <div className="text-2xl font-mono font-bold text-foreground">
@@ -297,6 +312,7 @@ function ActiveSession({ entry }: { entry: TimeEntry }) {
 
 function HistoryEntry({ entry }: { entry: TimeEntry }) {
   const taskLabel = stripListPrefix(entry.task_name, entry.list_name);
+  const taskUrl = getTaskUrl(entry);
   const durationParts = formatDurationParts(entry.duration);
   const entryDate = formatDate(entry.start_time);
 
@@ -317,14 +333,20 @@ function HistoryEntry({ entry }: { entry: TimeEntry }) {
                 </Badge>
               )}
             </div>
+            {taskUrl ? (
             <a
-              href={entry.task_url}
+                href={taskUrl}
               target="_blank"
               rel="noopener noreferrer"
             className="text-primary hover:underline text-sm truncate block"
             >
-              {taskLabel}
+                {taskLabel}
             </a>
+            ) : (
+              <span className="text-primary text-sm truncate block">
+                {taskLabel}
+              </span>
+            )}
           </div>
           <div className="text-right text-sm">
             <div className="flex items-baseline justify-end gap-1">
@@ -344,7 +366,7 @@ function HistoryEntry({ entry }: { entry: TimeEntry }) {
             </div>
             <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
               <span>
-                {formatTime(entry.start_time)} - {entry.end_time ? formatTime(entry.end_time) : '?'}
+              {formatTime(entry.start_time)} - {entry.end_time ? formatTime(entry.end_time) : '?'}
               </span>
               <span className="text-muted-foreground/60">•</span>
               <span>{entryDate}</span>
@@ -365,6 +387,7 @@ function LiveTab({
   setSelectedUser,
   token,
   isAdmin,
+  canFilterHistory,
   isImportOpen,
   onHistoryImported,
   historyRange,
@@ -379,6 +402,7 @@ function LiveTab({
   setSelectedUser: (id: string | null) => void;
   token: string | null;
   isAdmin: boolean;
+  canFilterHistory: boolean;
   isImportOpen: boolean;
   onHistoryImported: () => void;
   historyRange: HistoryRange;
@@ -391,6 +415,12 @@ function LiveTab({
   const filteredHistory = selectedUser
     ? history.filter((e) => e.user_id === selectedUser)
     : history;
+
+  useEffect(() => {
+    if (!canFilterHistory && selectedUser) {
+      setSelectedUser(null);
+    }
+  }, [canFilterHistory, selectedUser, setSelectedUser]);
 
   return (
     <>
@@ -433,44 +463,46 @@ function LiveTab({
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-foreground">Historia time trackingu</h2>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-muted-foreground">Filtruj historię:</span>
-              <select
-                value={selectedUser || ''}
-                onChange={(e) => setSelectedUser(e.target.value || null)}
-                className="w-full sm:w-56 px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring bg-card text-foreground text-sm font-medium"
-              >
-                <option value="">Wszyscy</option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.username}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:ml-auto sm:w-auto sm:justify-end">
-              {Object.entries(historyRangeLabels).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setHistoryRange(key as HistoryRange)}
-                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                    historyRange === key
-                    ? 'bg-[var(--active-surface)] text-foreground border border-[var(--active-border)]'
-                      : 'bg-card text-muted-foreground border border-border hover:bg-muted/60 hover:text-foreground'
-                  }`}
+            {canFilterHistory && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">Filtruj historię:</span>
+                <select
+                  value={selectedUser || ''}
+                  onChange={(e) => setSelectedUser(e.target.value || null)}
+                  className="w-full sm:w-56 h-9 px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring bg-background text-foreground text-sm font-medium"
                 >
-                  {label}
-                </button>
-              ))}
-              <select
-                value={historyLimit}
-                onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10))}
-                className="px-3 py-2 rounded-md text-sm font-medium border border-border bg-card text-foreground"
+                  <option value="">Wszyscy</option>
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:ml-auto sm:w-auto sm:justify-end">
+            {Object.entries(historyRangeLabels).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setHistoryRange(key as HistoryRange)}
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  historyRange === key
+                    ? 'bg-[var(--active-surface)] text-foreground border border-[var(--active-border)]'
+                    : 'bg-card text-muted-foreground border border-border hover:bg-muted/60 hover:text-foreground'
+                }`}
               >
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={200}>200</option>
-              </select>
+                {label}
+              </button>
+            ))}
+            <select
+              value={historyLimit}
+              onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10))}
+              className="h-9 px-3 py-2 rounded-md text-sm font-medium border border-border bg-background text-foreground"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
             </div>
           </div>
         </div>
@@ -637,7 +669,7 @@ type DashboardProps = {
 
 // Dashboard component - główna strona z aktywnością
 function Dashboard({ theme, onToggleTheme }: DashboardProps) {
-  const { token, logout, user, isAdmin } = useAuth();
+  const { token, logout, user, isAdmin, isPm } = useAuth();
   const [connected, setConnected] = useState(false);
   const [activeSessions, setActiveSessions] = useState<TimeEntry[]>([]);
   const [history, setHistory] = useState<TimeEntry[]>([]);
@@ -650,6 +682,7 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isNotionSyncOpen, setIsNotionSyncOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const canFilterHistory = isAdmin || isPm;
 
   const getTabButtonClasses = (isActive: boolean) => {
     const baseClasses = 'px-4 py-1.5 text-sm font-medium rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -763,13 +796,17 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
       .then((data) => setHistory(data.entries || []))
       .catch(console.error);
 
-    fetch(`${API_URL}/api/stats/team?period=month`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => setUsers(data.users || []))
-      .catch(console.error);
-  }, [token, historyRange, historyLimit]);
+    if (canFilterHistory) {
+      fetch(`${API_URL}/api/stats/team?period=month`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+        .then((res) => res.json())
+        .then((data) => setUsers(data.users || []))
+        .catch(console.error);
+    } else {
+      setUsers([]);
+    }
+  }, [token, historyRange, historyLimit, canFilterHistory]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -860,24 +897,24 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
           {/* Zakładki */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex gap-1 rounded-full bg-muted/60 p-1 border border-border">
-              <button
-                onClick={() => setActiveTab('live')}
+            <button
+              onClick={() => setActiveTab('live')}
                 className={getTabButtonClasses(activeTab === 'live')}
-              >
-                Live Activity
-              </button>
-              <button
-                onClick={() => setActiveTab('stats')}
+            >
+              Live Activity
+            </button>
+            <button
+              onClick={() => setActiveTab('stats')}
                 className={getTabButtonClasses(activeTab === 'stats')}
-              >
-                Statystyki
-              </button>
-              <button
-                onClick={() => setActiveTab('earnings')}
+            >
+              Statystyki
+            </button>
+            <button
+              onClick={() => setActiveTab('earnings')}
                 className={getTabButtonClasses(activeTab === 'earnings')}
-              >
-                Zarobki
-              </button>
+            >
+              Zarobki
+            </button>
             </div>
             {isAdmin && token && activeTab === 'live' && (
               <Button
@@ -915,6 +952,7 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
             setSelectedUser={setSelectedUser}
             token={token}
             isAdmin={isAdmin}
+            canFilterHistory={canFilterHistory}
             isImportOpen={isImportOpen}
             onHistoryImported={() => {
               if (!token) return;
@@ -934,12 +972,16 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
                 .then((data) => setHistory(data.entries || []))
                 .catch(console.error);
 
-              fetch(`${API_URL}/api/stats/team?period=month`, {
-                headers: { 'Authorization': `Bearer ${token}` },
-              })
-                .then((res) => res.json())
-                .then((data) => setUsers(data.users || []))
-                .catch(console.error);
+              if (canFilterHistory) {
+                fetch(`${API_URL}/api/stats/team?period=month`, {
+                  headers: { 'Authorization': `Bearer ${token}` },
+                })
+                  .then((res) => res.json())
+                  .then((data) => setUsers(data.users || []))
+                  .catch(console.error);
+              } else {
+                setUsers([]);
+              }
             }}
             historyRange={historyRange}
             setHistoryRange={setHistoryRange}

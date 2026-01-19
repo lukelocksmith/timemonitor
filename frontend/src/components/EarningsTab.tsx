@@ -27,7 +27,8 @@ type EarningsSummaryResponse = {
 };
 
 export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
-  const { token, isAdmin } = useAuth();
+  const { token, isAdmin, user } = useAuth();
+  const showUserRate = user?.role === 'user';
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '', period: 'month' });
   const [summary, setSummary] = useState<EarningsSummaryResponse | null>(null);
   const [byUser, setByUser] = useState<EarningsUserRow[]>([]);
@@ -115,7 +116,7 @@ export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
             <UnmappedEntries dateRange={dateRange} unmappedCount={summary.entries.unmapped} />
           )}
 
-          <EarningsByUser rows={byUser} isAdmin={isAdmin} />
+          <EarningsByUser rows={byUser} isAdmin={isAdmin} showUserRate={showUserRate} />
           <EarningsByProject rows={byProject} isAdmin={isAdmin} />
         </>
       ) : (

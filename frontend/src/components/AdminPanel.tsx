@@ -29,6 +29,8 @@ export function AdminPanel() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
   const [resetPasswordUser, setResetPasswordUser] = useState<AppUser | null>(null);
+  const [fixResult, setFixResult] = useState<{ message: string; fixed?: number } | null>(null);
+  const [isFixing, setIsFixing] = useState(false);
 
   // Form state
   const [newUsername, setNewUsername] = useState('');
@@ -198,6 +200,24 @@ export function AdminPanel() {
     setNewClickupUserId(user.clickup_user_id || '');
   };
 
+  const handleFixDurations = async () => {
+    setIsFixing(true);
+    setFixResult(null);
+    try {
+      const response = await fetch(`${API_URL}/admin/fix-durations`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      const data = await response.json();
+      setFixResult(data);
+    } catch (err) {
+      setFixResult({ message: 'Błąd naprawy wpisów' });
+    } finally {
+      setIsFixing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-6">
@@ -225,10 +245,32 @@ export function AdminPanel() {
         </div>
       )}
 
+      {/* Narzędzia administracyjne */}
+      <div className="bg-card rounded-2xl border border-border p-4 mb-6">
+        <h2 className="text-lg font-semibold text-foreground mb-3">Narzędzia</h2>
+        <div className="flex flex-wrap gap-3 items-center">
+          <button
+            onClick={handleFixDurations}
+            disabled={isFixing}
+            className="px-4 py-2 bg-amber-600 text-white rounded-lg transition-colors hover:bg-amber-700 disabled:opacity-50"
+          >
+            {isFixing ? 'Naprawianie...' : 'Napraw wpisy z duration=0'}
+          </button>
+          {fixResult && (
+            <span className={`text-sm ${fixResult.fixed ? 'text-emerald-400' : 'text-muted-foreground'}`}>
+              {fixResult.message}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          Oblicza duration na podstawie start_time i end_time dla wpisów które mają duration=0
+        </p>
+      </div>
+
       {/* Create User Modal */}
       {showCreateForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card p-6 rounded-2xl border border-border w-full max-w-md">
+          <div className="bg-[var(--menu-bg)] p-6 rounded-2xl border border-border w-full max-w-md">
             <h2 className="text-xl font-bold text-foreground mb-4">Nowy użytkownik</h2>
             <form onSubmit={handleCreateUser} className="space-y-4">
               <div>
@@ -296,7 +338,7 @@ export function AdminPanel() {
               <div className="flex gap-3 mt-6">
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-primary text-primary-foreground rounded transition-colors hover:bg-primary/90"
+                  className="flex-1 py-2 bg-foreground text-background rounded transition-colors hover:bg-foreground/90"
                 >
                   Utwórz
                 </button>
@@ -316,7 +358,7 @@ export function AdminPanel() {
       {/* Edit User Modal */}
       {editingUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card p-6 rounded-2xl border border-border w-full max-w-md">
+          <div className="bg-[var(--menu-bg)] p-6 rounded-2xl border border-border w-full max-w-md">
             <h2 className="text-xl font-bold text-foreground mb-4">Edytuj: {editingUser.username}</h2>
             <form onSubmit={handleUpdateUser} className="space-y-4">
               <div>
@@ -366,7 +408,7 @@ export function AdminPanel() {
               <div className="flex gap-3 mt-6">
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-primary text-primary-foreground rounded transition-colors hover:bg-primary/90"
+                  className="flex-1 py-2 bg-foreground text-background rounded transition-colors hover:bg-foreground/90"
                 >
                   Zapisz
                 </button>
@@ -386,7 +428,7 @@ export function AdminPanel() {
       {/* Reset Password Modal */}
       {resetPasswordUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card p-6 rounded-2xl border border-border w-full max-w-md">
+          <div className="bg-[var(--menu-bg)] p-6 rounded-2xl border border-border w-full max-w-md">
             <h2 className="text-xl font-bold text-foreground mb-4">Reset hasła: {resetPasswordUser.username}</h2>
             <form onSubmit={handleResetPassword} className="space-y-4">
               <div>
@@ -403,7 +445,7 @@ export function AdminPanel() {
               <div className="flex gap-3 mt-6">
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-primary text-primary-foreground rounded transition-colors hover:bg-primary/90"
+                  className="flex-1 py-2 bg-foreground text-background rounded transition-colors hover:bg-foreground/90"
                 >
                   Zmień hasło
                 </button>

@@ -95,9 +95,15 @@ io.on('connection', (socket) => {
        WHERE te.end_time IS NULL
        ORDER BY te.start_time DESC`
     )
-    .all() as Array<Record<string, unknown> & { user_id?: string }>;
+    .all() as Array<Record<string, unknown> & { user_id?: string; task_id?: string; task_url?: string }>;
 
-  sendActiveSessionsToSocket(socket, activeSessions);
+  // Ensure task_url is always set (fallback to generated URL)
+  const sessionsWithUrls = activeSessions.map((session) => ({
+    ...session,
+    task_url: session.task_url || (session.task_id ? `https://app.clickup.com/t/${session.task_id}` : null),
+  }));
+
+  sendActiveSessionsToSocket(socket, sessionsWithUrls);
 
   socket.on('disconnect', () => {
     console.log(`🔌 Klient rozłączony: ${socket.id} (${user?.username || 'unknown'})`);
