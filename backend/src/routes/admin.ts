@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import {
+  db,
   getAllAppUsers,
   getAppUserById,
   getAppUserByUsername,
@@ -200,8 +201,6 @@ adminRouter.post('/users/:id/reset-password', async (req: AuthenticatedRequest, 
 
 // POST /admin/fix-durations - Napraw wpisy z duration=0
 adminRouter.post('/fix-durations', (req: AuthenticatedRequest, res: Response) => {
-  const { db } = require('../database.js');
-
   // Znajdź wpisy z duration=0 które mają start_time i end_time
   const brokenEntries = db
     .prepare(
