@@ -4,7 +4,7 @@ import { db, upsertTask, upsertUser } from '../database.js';
 import { AuthenticatedRequest } from '../types/auth.js';
 import { fetchClickUpTask, fetchClickUpTeamMembers, fetchClickUpTimeEntries, getClickUpTeamId } from '../clickup.js';
 import { getScope, requireWorkerLink } from '../auth/scope.js';
-import { MAX_ENTRY_DURATION_MS, DURATION_FILTER_SQL } from '../constants.js';
+import { MAX_ENTRY_DURATION_MS, DURATION_FILTER_SQL, MAX_IMPORT_ENTRIES_PER_USER } from '../constants.js';
 
 export const earningsRouter = Router();
 
@@ -759,6 +759,16 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
       }
     });
 
+    // Streaming response — wysyłaj postęp jako NDJSON, żeby proxy nie zabił połączenia
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no'); // wyłącz buforowanie w nginx/caddy
+    res.flushHeaders();
+
+    const sendProgress = (data: Record<string, unknown>) => {
+      res.write(JSON.stringify(data) + '\n');
+    };
+
     let totalFetched = 0;
     let totalSaved = 0;
     let skipped = 0;
@@ -769,7 +779,9 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
       assigneeIndex++;
       let page = 0;
       let assigneeFetched = 0;
+      const seenIds = new Set<string>();
       console.log(`\n   👤 [${assigneeIndex}/${assigneeIds.length}] Pobieram wpisy dla użytkownika ${assigneeId}...`);
+      sendProgress({ type: 'progress', user: assigneeIndex, totalUsers: assigneeIds.length, assigneeId });
 
       while (true) {
         const entries = await fetchClickUpTimeEntries({
@@ -787,10 +799,31 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
           break;
         }
 
+        // Wykrywanie duplikatów — ClickUp API potrafi zwracać te same wpisy w kółko
+        let duplicates = 0;
+        for (const entry of entries) {
+          const eid = entry.id ? String(entry.id) : null;
+          if (eid && seenIds.has(eid)) {
+            duplicates++;
+          } else if (eid) {
+            seenIds.add(eid);
+          }
+        }
+        if (duplicates > entries.length / 2) {
+          console.log(`      ⚠️ Strona ${page + 1}: ${duplicates}/${entries.length} duplikatów — przerywam paginację`);
+          break;
+        }
+
         totalFetched += entries.length;
         assigneeFetched += entries.length;
         totalPages += 1;
         console.log(`      Strona ${page + 1}: ${entries.length} wpisów (łącznie: ${assigneeFetched})`);
+
+        // Safety limit per user — zabezpieczenie przed nieskończoną paginacją API
+        if (assigneeFetched >= MAX_IMPORT_ENTRIES_PER_USER) {
+          console.log(`      ⚠️ Osiągnięto limit ${MAX_IMPORT_ENTRIES_PER_USER} wpisów dla użytkownika ${assigneeId} — przerywam`);
+          break;
+        }
 
         const normalized: Array<{
           id: string;
@@ -886,6 +919,11 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
         upsertEntries(normalized);
         totalSaved += normalized.length;
 
+        // Wysyłaj postęp co 10 stron
+        if (totalPages % 10 === 0) {
+          sendProgress({ type: 'progress', user: assigneeIndex, totalUsers: assigneeIds.length, fetched: totalFetched, saved: totalSaved });
+        }
+
         if (entries.length < limit) {
           break;
         }
@@ -897,7 +935,8 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
     console.log(`   Pobrano: ${totalFetched} wpisów, Zapisano: ${totalSaved}, Pominięto: ${skipped}`);
     console.log(`   Stron API: ${totalPages}, Członków: ${assigneeIds.length}, Tasków w cache: ${taskCache.size}\n`);
 
-    res.json({
+    const result = {
+      type: 'done' as const,
       range: label,
       start: start.toISOString(),
       end: end.toISOString(),
@@ -906,12 +945,21 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
       skipped,
       pages: totalPages,
       assignees: assigneeIds.length,
-    });
+    };
+    sendProgress(result);
+    res.end();
   } catch (error) {
     console.error(`\n❌ [IMPORT] Błąd:`, error instanceof Error ? error.message : error);
-    res.status(500).json({
-      error: 'Błąd importu historii time trackingu',
-      details: error instanceof Error ? error.message : 'Nieznany błąd',
-    });
+    try {
+      const errPayload = {
+        type: 'error' as const,
+        error: 'Błąd importu historii time trackingu',
+        details: error instanceof Error ? error.message : 'Nieznany błąd',
+      };
+      res.write(JSON.stringify(errPayload) + '\n');
+      res.end();
+    } catch {
+      // response already ended
+    }
   }
 });

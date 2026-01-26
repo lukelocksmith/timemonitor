@@ -60,12 +60,14 @@ const PRESET_LABELS: Record<RangePreset, string> = {
   custom: 'Własny zakres',
 };
 
-const IMPORT_STEPS = [
-  'Pobieram listę członków zespołu...',
-  'Pobieram wpisy z ClickUp API...',
-  'Pobieram szczegóły zadań...',
-  'Zapisuję do bazy danych...',
-];
+type ImportProgress = {
+  type: 'progress';
+  user: number;
+  totalUsers: number;
+  assigneeId?: string;
+  fetched?: number;
+  saved?: number;
+};
 
 export function TimeEntriesImport({
   token,
@@ -81,20 +83,17 @@ export function TimeEntriesImport({
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [elapsed, setElapsed] = useState(0);
-  const [stepIndex, setStepIndex] = useState(0);
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Elapsed timer + step rotation during import
+  // Elapsed timer during import
   useEffect(() => {
     if (isImporting) {
       setElapsed(0);
-      setStepIndex(0);
+      setProgress(null);
       const startTime = Date.now();
       timerRef.current = setInterval(() => {
-        const sec = Math.floor((Date.now() - startTime) / 1000);
-        setElapsed(sec);
-        // Rotate steps every 4 seconds (cycle through available steps)
-        setStepIndex(Math.floor(sec / 4) % IMPORT_STEPS.length);
+        setElapsed(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
     } else {
       if (timerRef.current) {
@@ -144,15 +143,58 @@ export function TimeEntriesImport({
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.details || 'Błąd importu historii');
+        // Może być zwykły JSON error (np. 401)
+        const text = await response.text();
+        try {
+          const data = JSON.parse(text);
+          throw new Error(data.details || 'Błąd importu historii');
+        } catch {
+          throw new Error(`Błąd ${response.status}: ${text.slice(0, 200)}`);
+        }
       }
 
-      const data = await response.json();
-      setStatus(
-        `Zapisano ${data.saved} z ${data.fetched} wpisów (pominięto: ${data.skipped}, członków: ${data.assignees}).`
-      );
-      onImported();
+      // Czytaj NDJSON stream linia po linii
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Brak body w odpowiedzi');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let result: { saved?: number; fetched?: number; skipped?: number; assignees?: number } | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // ostatnia linia może być niekompletna
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.type === 'progress') {
+              setProgress(msg as ImportProgress);
+            } else if (msg.type === 'done') {
+              result = msg;
+            } else if (msg.type === 'error') {
+              throw new Error(msg.details || msg.error || 'Błąd importu');
+            }
+          } catch (parseErr) {
+            // Ignoruj nieparsowalne linie
+            if (parseErr instanceof Error && parseErr.message.includes('Błąd')) throw parseErr;
+          }
+        }
+      }
+
+      if (result) {
+        setStatus(
+          `Zapisano ${result.saved} z ${result.fetched} wpisów (pominięto: ${result.skipped}, członków: ${result.assignees}).`
+        );
+        onImported();
+      } else {
+        throw new Error('Import nie zwrócił wyniku końcowego');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Błąd importu historii');
     } finally {
@@ -230,7 +272,11 @@ export function TimeEntriesImport({
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
-          <span>{IMPORT_STEPS[stepIndex]}</span>
+          <span>
+            {progress
+              ? `Użytkownik ${progress.user}/${progress.totalUsers}${progress.fetched ? ` — pobrano ${progress.fetched} wpisów` : ''}`
+              : 'Rozpoczynam import...'}
+          </span>
           <span className="font-mono text-xs ml-auto">{elapsed}s</span>
         </div>
       )}
