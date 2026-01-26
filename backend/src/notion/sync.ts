@@ -1,4 +1,5 @@
 import { db } from '../database.js';
+import { getConfig } from '../config.js';
 import { queryNotionDataSource, queryNotionDatabase } from './client.js';
 
 type NotionPage = {
@@ -12,8 +13,8 @@ type NotionSource = {
 };
 
 function resolveSource(dataSourceEnv: string, databaseEnv: string): NotionSource {
-  const dataSourceId = process.env[dataSourceEnv];
-  const databaseId = process.env[databaseEnv];
+  const dataSourceId = getConfig(dataSourceEnv) ?? undefined;
+  const databaseId = getConfig(databaseEnv) ?? undefined;
   if (dataSourceId || databaseId) {
     return { dataSourceId, databaseId };
   }
@@ -231,6 +232,8 @@ export async function syncProjects() {
         getUrl(getProperty(properties, 'Clickup', 'ClickUp')) ||
         getFormulaValue(getProperty(properties, 'ID clickup', 'ID ClickUp'));
       const clickupId = normalizeClickUpListId(clickupIdCandidate || null);
+      const monthlyBudget =
+        getNumber(getProperty(properties, 'Budżet miesięczny', 'Budzet miesieczny', 'Monthly budget')) ?? 0;
 
       if (!name) {
         return null;
@@ -241,6 +244,7 @@ export async function syncProjects() {
         clickup_id: clickupId || null,
         name,
         hourly_rate: hourlyRate,
+        monthly_budget: monthlyBudget,
         status: status || null,
         tags: tags.length > 0 ? tags.join(', ') : null,
       };
@@ -250,18 +254,20 @@ export async function syncProjects() {
     clickup_id: string | null;
     name: string;
     hourly_rate: number;
+    monthly_budget: number;
     status: string | null;
     tags: string | null;
   }>;
 
   const insertProject = db.prepare(`
     INSERT INTO notion_projects (
-      notion_page_id, clickup_id, name, hourly_rate, status, tags, synced_at
-    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      notion_page_id, clickup_id, name, hourly_rate, monthly_budget, status, tags, synced_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(notion_page_id) DO UPDATE SET
       clickup_id = excluded.clickup_id,
       name = excluded.name,
       hourly_rate = excluded.hourly_rate,
+      monthly_budget = excluded.monthly_budget,
       status = excluded.status,
       tags = excluded.tags,
       synced_at = CURRENT_TIMESTAMP
@@ -274,6 +280,7 @@ export async function syncProjects() {
         row.clickup_id,
         row.name,
         row.hourly_rate,
+        row.monthly_budget,
         row.status,
         row.tags
       );

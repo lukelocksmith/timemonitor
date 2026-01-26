@@ -1,4 +1,5 @@
 import { Agent, setGlobalDispatcher } from 'undici';
+import { getConfig } from '../config.js';
 
 const NOTION_API_BASE = 'https://api.notion.com/v1';
 const DEFAULT_NOTION_VERSION = '2022-06-28';
@@ -13,14 +14,14 @@ const agent = new Agent({
 setGlobalDispatcher(agent);
 
 function getNotionHeaders() {
-  const token = process.env.NOTION_API_KEY;
+  const token = getConfig('NOTION_API_KEY');
   if (!token) {
     throw new Error('Brak NOTION_API_KEY w .env');
   }
 
   return {
     Authorization: `Bearer ${token}`,
-    'Notion-Version': process.env.NOTION_VERSION || DEFAULT_NOTION_VERSION,
+    'Notion-Version': getConfig('NOTION_VERSION', DEFAULT_NOTION_VERSION)!,
     'Content-Type': 'application/json',
   };
 }

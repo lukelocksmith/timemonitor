@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db, upsertUser, upsertTask } from '../database.js';
 import { fetchClickUpTask } from '../clickup.js';
 import { emitScopedEvent } from '../socket.js';
+import { MAX_ENTRY_DURATION_MS } from '../constants.js';
 
 export const webhookRouter = Router();
 
@@ -203,11 +204,17 @@ async function handleTimeTrackedUpdated(payload: ClickUpWebhookPayload, io: any)
   if (timeEntry && prevEntry) {
     const startTime = new Date(parseInt(timeEntry.start)).toISOString();
     const endTime = timeEntry.end ? new Date(parseInt(timeEntry.end)).toISOString() : null;
-    const duration = parseInt(timeEntry.time) || 0;
+    let duration = parseInt(timeEntry.time) || 0;
 
     // Czy to stop? (poprzednio nie było end, teraz jest)
     const wasRunning = !prevEntry.end || prevEntry.end === prevEntry.start;
     const isNowStopped = timeEntry.end && timeEntry.end !== timeEntry.start;
+
+    // Cap na maksymalny czas trwania
+    if (duration > MAX_ENTRY_DURATION_MS) {
+      console.log(`⚠️ Webhook: duration ${Math.round(duration / 3600000)}h > max ${MAX_ENTRY_DURATION_MS / 3600000}h — capping`);
+      duration = MAX_ENTRY_DURATION_MS;
+    }
 
     if (wasRunning && isNowStopped) {
       console.log(`⏹️ ${user.username} skończył: ${taskName} (${Math.round(duration / 1000 / 60)}min)`);

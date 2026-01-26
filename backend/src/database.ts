@@ -123,6 +123,29 @@ export async function initDatabase() {
 
   db.prepare(`CREATE INDEX IF NOT EXISTS idx_notion_projects_clickup ON notion_projects(clickup_id)`).run();
 
+  // Migracja: dodanie monthly_budget do notion_projects
+  const projectCols = db.prepare(`PRAGMA table_info(notion_projects)`).all() as Array<{ name: string }>;
+  if (!projectCols.some((c) => c.name === 'monthly_budget')) {
+    db.prepare(`ALTER TABLE notion_projects ADD COLUMN monthly_budget REAL DEFAULT 0`).run();
+  }
+
+  // Migracja: dodanie is_internal do notion_projects
+  // Projekty wewnętrzne (np. "important") nie generują przychodu — tylko koszty.
+  if (!projectCols.some((c) => c.name === 'is_internal')) {
+    db.prepare(`ALTER TABLE notion_projects ADD COLUMN is_internal INTEGER DEFAULT 0`).run();
+  }
+
+  // Tabela ustawień aplikacji (runtime-changeable config)
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      description TEXT,
+      is_secret INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+
   // Seed admin user jeśli nie istnieje
   await seedAdminUser();
 
@@ -297,6 +320,40 @@ export function upsertUser(user: {
       updated_at = CURRENT_TIMESTAMP
   `);
   stmt.run(user.id, user.username, user.email, user.color, user.profilePicture);
+}
+
+// ── app_settings CRUD ────────────────────────────────────────────────
+export type AppSetting = {
+  key: string;
+  value: string;
+  description: string | null;
+  is_secret: number;
+  updated_at: string;
+};
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string, description?: string, isSecret?: boolean): void {
+  db.prepare(`
+    INSERT INTO app_settings (key, value, description, is_secret, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      description = COALESCE(excluded.description, description),
+      is_secret = COALESCE(excluded.is_secret, is_secret),
+      updated_at = CURRENT_TIMESTAMP
+  `).run(key, value, description ?? null, isSecret ? 1 : 0);
+}
+
+export function deleteSetting(key: string): void {
+  db.prepare('DELETE FROM app_settings WHERE key = ?').run(key);
+}
+
+export function getAllSettings(): AppSetting[] {
+  return db.prepare('SELECT key, value, description, is_secret, updated_at FROM app_settings ORDER BY key').all() as AppSetting[];
 }
 
 export function upsertTask(task: {

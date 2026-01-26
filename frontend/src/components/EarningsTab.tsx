@@ -29,7 +29,7 @@ type EarningsSummaryResponse = {
 export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
   const { token, isAdmin, user } = useAuth();
   const showUserRate = user?.role === 'user';
-  const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '', period: 'month' });
+  const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '', period: 'today' });
   const [summary, setSummary] = useState<EarningsSummaryResponse | null>(null);
   const [byUser, setByUser] = useState<EarningsUserRow[]>([]);
   const [byProject, setByProject] = useState<EarningsProjectRow[]>([]);
@@ -95,7 +95,7 @@ export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
         <NotionSync token={token} onSynced={fetchEarnings} />
       )}
 
-      <DateRangePicker onChange={setDateRange} initialPeriod="month" />
+      <DateRangePicker onChange={setDateRange} initialPeriod="today" />
 
       {loading ? (
         <div className="text-center py-8 text-muted-foreground">Ładowanie...</div>

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database.js';
 import { requireAuth } from '../auth/middleware.js';
 import { getScope, requireWorkerLink } from '../auth/scope.js';
+import { MAX_ENTRY_DURATION_MS } from '../constants.js';
 
 export const apiRouter = Router();
 
@@ -72,7 +73,7 @@ apiRouter.get('/history', (req: Request, res: Response) => {
   }
 
   const params: (string | number)[] = [];
-  let whereClause = 'te.end_time IS NOT NULL';
+  let whereClause = `te.end_time IS NOT NULL AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}`;
 
   if (startParam && endParam) {
     const startDate = new Date(startParam);
@@ -142,7 +143,8 @@ apiRouter.get('/user/:userId/stats', (req: Request, res: Response) => {
         COUNT(DISTINCT task_id) as unique_tasks
        FROM time_entries
        WHERE user_id = ?
-         AND start_time >= datetime('now', '-' || ? || ' days')`
+         AND start_time >= datetime('now', '-' || ? || ' days')
+         AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}`
     )
     .get(userId, days);
 
@@ -156,6 +158,7 @@ apiRouter.get('/user/:userId/stats', (req: Request, res: Response) => {
        FROM time_entries
        WHERE user_id = ?
          AND start_time >= datetime('now', '-' || ? || ' days')
+         AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}
        GROUP BY task_id
        ORDER BY total_duration DESC
        LIMIT 10`
@@ -212,7 +215,7 @@ apiRouter.get('/stats/today', (req: Request, res: Response) => {
         COUNT(DISTINCT user_id) as active_users,
         COUNT(*) as total_entries,
         SUM(CASE WHEN end_time IS NULL THEN 1 ELSE 0 END) as currently_active,
-        SUM(duration) as total_duration
+        SUM(CASE WHEN duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS} THEN duration ELSE 0 END) as total_duration
        FROM time_entries
        WHERE date(start_time) = ?
        ${userCondition}`
@@ -225,7 +228,7 @@ apiRouter.get('/stats/today', (req: Request, res: Response) => {
         user_id,
         user_name,
         COUNT(*) as entries_count,
-        SUM(duration) as total_duration,
+        SUM(CASE WHEN duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS} THEN duration ELSE 0 END) as total_duration,
         (SELECT end_time IS NULL FROM time_entries t2
          WHERE t2.user_id = time_entries.user_id
          ORDER BY start_time DESC LIMIT 1) as is_active
@@ -316,6 +319,7 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
          LEFT JOIN time_entries te ON u.id = te.user_id
            AND te.start_time >= ? AND te.start_time <= ?
            AND te.end_time IS NOT NULL
+           AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
          WHERE u.id = ?
          GROUP BY u.id`
       )
@@ -330,6 +334,7 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
          FROM time_entries
          WHERE start_time >= ? AND start_time <= ?
            AND end_time IS NOT NULL
+           AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}
            AND user_id = ?`
       )
       .get(start, end, clickupUserId);
@@ -358,6 +363,7 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
        LEFT JOIN time_entries te ON u.id = te.user_id
          AND te.start_time >= ? AND te.start_time <= ?
          AND te.end_time IS NOT NULL
+         AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
        GROUP BY u.id
        ORDER BY total_duration DESC`
     )
@@ -371,7 +377,8 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
         COUNT(DISTINCT user_id) as active_users
        FROM time_entries
        WHERE start_time >= ? AND start_time <= ?
-         AND end_time IS NOT NULL`
+         AND end_time IS NOT NULL
+         AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}`
     )
     .get(start, end);
 
@@ -409,6 +416,7 @@ apiRouter.get('/history/filtered', (req: Request, res: Response) => {
     FROM time_entries te
     LEFT JOIN users u ON te.user_id = u.id
     WHERE te.end_time IS NOT NULL
+      AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
   `;
 
   const params: (string | number)[] = [];
@@ -433,7 +441,7 @@ apiRouter.get('/history/filtered', (req: Request, res: Response) => {
 
   const entries = db.prepare(query).all(...params);
 
-  let countQuery = `SELECT COUNT(*) as count FROM time_entries WHERE end_time IS NOT NULL`;
+  let countQuery = `SELECT COUNT(*) as count FROM time_entries WHERE end_time IS NOT NULL AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}`;
   const countParams: string[] = [];
 
   if (userId) {

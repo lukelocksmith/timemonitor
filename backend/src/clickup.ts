@@ -1,12 +1,14 @@
+import { getConfig } from './config.js';
+
 const CLICKUP_API_BASE = 'https://api.clickup.com/api/v2';
 const DEFAULT_TEAM_ID = '4552118';
 
 export function getClickUpTeamId(): string {
-  return process.env.CLICKUP_TEAM_ID || DEFAULT_TEAM_ID;
+  return getConfig('CLICKUP_TEAM_ID', DEFAULT_TEAM_ID)!;
 }
 
 function getClickUpToken(): string | null {
-  return process.env.CLICKUP_API_TOKEN || null;
+  return getConfig('CLICKUP_API_TOKEN') || null;
 }
 
 export type ClickUpTaskDetails = {

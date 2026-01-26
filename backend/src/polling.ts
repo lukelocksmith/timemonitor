@@ -2,6 +2,7 @@ import { db, upsertTask } from './database.js';
 import { Server } from 'socket.io';
 import { fetchClickUpTask, getClickUpTeamId } from './clickup.js';
 import { emitActiveSessions, emitScopedEvent } from './socket.js';
+import { MAX_ENTRY_DURATION_MS } from './constants.js';
 
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 const POLL_INTERVAL = 30000; // 30 sekund
@@ -315,7 +316,11 @@ export function startPolling(io: Server) {
           }
         }
 
-        const durationMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        let durationMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        if (durationMs > MAX_ENTRY_DURATION_MS) {
+          console.log(`   ⚠️ Duration ${Math.round(durationMs / 3600000)}h > max ${MAX_ENTRY_DURATION_MS / 3600000}h — capping`);
+          durationMs = MAX_ENTRY_DURATION_MS;
+        }
         console.log(`   Duration: ${Math.round(durationMs / 1000 / 60)}min (${durationMs}ms)`);
 
         db.prepare(`

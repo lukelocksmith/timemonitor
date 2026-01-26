@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { Button } from './ui/button';
 
-export type PeriodPreset = 'today' | 'week' | 'month' | 'last_month' | 'custom';
+export type PeriodPreset = 'yesterday' | 'today' | 'week' | 'month' | 'last_month' | 'custom';
 
 export interface DateRange {
   start: string; // YYYY-MM-DD
@@ -14,6 +14,14 @@ function getPresetDates(preset: PeriodPreset): { start: string; end: string } {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   switch (preset) {
+    case 'yesterday': {
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      return {
+        start: yesterday.toISOString().split('T')[0],
+        end: today.toISOString().split('T')[0],
+      };
+    }
     case 'today': {
       const end = new Date(today);
       end.setDate(end.getDate() + 1);
@@ -55,20 +63,21 @@ function getPresetDates(preset: PeriodPreset): { start: string; end: string } {
   }
 }
 
-const PRESET_LABELS: Record<PeriodPreset, string> = {
-  today: 'Dzisiaj',
-  week: 'Ten tydzień',
-  month: 'Ten miesiąc',
-  last_month: 'Poprzedni miesiąc',
-  custom: 'Własny zakres',
-};
+const PRESETS: { key: PeriodPreset; label: string }[] = [
+  { key: 'today', label: 'Dzisiaj' },
+  { key: 'yesterday', label: 'Wczoraj' },
+  { key: 'week', label: 'Ten tydzień' },
+  { key: 'month', label: 'Ten miesiąc' },
+  { key: 'last_month', label: 'Poprzedni miesiąc' },
+  { key: 'custom', label: 'Własny zakres' },
+];
 
 interface DateRangePickerProps {
   onChange: (range: DateRange) => void;
   initialPeriod?: PeriodPreset;
 }
 
-export function DateRangePicker({ onChange, initialPeriod = 'month' }: DateRangePickerProps) {
+export function DateRangePicker({ onChange, initialPeriod = 'today' }: DateRangePickerProps) {
   const [preset, setPreset] = useState<PeriodPreset>(initialPeriod);
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -103,20 +112,20 @@ export function DateRangePicker({ onChange, initialPeriod = 'month' }: DateRange
     <div className="space-y-3">
       {/* Preset buttons */}
       <div className="flex flex-wrap gap-2">
-        {(Object.keys(PRESET_LABELS) as PeriodPreset[]).map((p) => (
+        {PRESETS.map(({ key, label }) => (
           <Button
-            key={p}
-            onClick={() => setPreset(p)}
+            key={key}
+            onClick={() => setPreset(key)}
             type="button"
             size="sm"
             variant="outline"
             className={`px-4 ${
-              preset === p
+              preset === key
                 ? 'bg-[var(--active-surface)] text-foreground border-[var(--active-border)] hover:bg-[var(--active-surface)]'
                 : 'bg-card text-muted-foreground border-border hover:bg-muted/60 hover:text-foreground'
             }`}
           >
-            {PRESET_LABELS[p]}
+            {label}
           </Button>
         ))}
       </div>

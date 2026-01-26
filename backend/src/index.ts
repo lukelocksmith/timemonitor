@@ -10,6 +10,7 @@ import { authRouter } from './routes/auth.js';
 import { adminRouter } from './routes/admin.js';
 import { notionRouter } from './routes/notion.js';
 import { earningsRouter } from './routes/earnings.js';
+import { homeRouter } from './routes/home.js';
 import { startPolling } from './polling.js';
 import { verifyToken } from './auth/jwt.js';
 import { sendActiveSessionsToSocket } from './socket.js';
@@ -72,6 +73,7 @@ app.use('/api', apiRouter);
 app.use('/admin', adminRouter);
 app.use('/api/notion', notionRouter);
 app.use('/api/earnings', earningsRouter);
+app.use('/api/home', homeRouter);
 
 // Health check
 app.get('/health', (req, res) => {

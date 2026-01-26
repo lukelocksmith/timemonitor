@@ -20,6 +20,17 @@ interface ClickUpUser {
   email?: string;
 }
 
+interface SettingItem {
+  key: string;
+  value: string | null;
+  maskedValue: string | null;
+  source: 'db' | 'env' | 'default';
+  is_secret: boolean;
+  description: string;
+  is_restart_required: boolean;
+  updated_at: string | null;
+}
+
 export function AdminPanel() {
   const { token, user: currentUser } = useAuth();
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -39,6 +50,14 @@ export function AdminPanel() {
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newClickupUserId, setNewClickupUserId] = useState('');
 
+  // Settings state
+  const [settings, setSettings] = useState<SettingItem[]>([]);
+  const [editingSetting, setEditingSetting] = useState<string | null>(null);
+  const [settingValue, setSettingValue] = useState('');
+  const [settingSaving, setSettingSaving] = useState(false);
+  const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string } | null>>({});
+  const [testingService, setTestingService] = useState<string | null>(null);
+
   const fetchUsers = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/users`, {
@@ -50,7 +69,7 @@ export function AdminPanel() {
         setUsers(data);
       }
     } catch (err) {
-      setError('Błąd pobierania użytkowników');
+      setError('Blad pobierania uzytkownikow');
     } finally {
       setIsLoading(false);
     }
@@ -67,13 +86,29 @@ export function AdminPanel() {
         setClickupUsers(data);
       }
     } catch {
-      // brak dodatkowej obsługi
+      // brak dodatkowej obslugi
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const response = await fetch(`${API_URL}/admin/settings`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSettings(data);
+      }
+    } catch {
+      // settings fetch failure is non-critical
     }
   };
 
   useEffect(() => {
     fetchUsers();
     fetchClickupUsers();
+    fetchSettings();
   }, [token]);
 
   const handleCreateUser = async (e: FormEvent) => {
@@ -98,7 +133,7 @@ export function AdminPanel() {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Błąd tworzenia użytkownika');
+        throw new Error(data.error || 'Blad tworzenia uzytkownika');
       }
 
       setShowCreateForm(false);
@@ -109,7 +144,7 @@ export function AdminPanel() {
       setNewClickupUserId('');
       fetchUsers();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Błąd tworzenia użytkownika');
+      setError(err instanceof Error ? err.message : 'Blad tworzenia uzytkownika');
     }
   };
 
@@ -134,13 +169,13 @@ export function AdminPanel() {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Błąd aktualizacji użytkownika');
+        throw new Error(data.error || 'Blad aktualizacji uzytkownika');
       }
 
       setEditingUser(null);
       fetchUsers();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Błąd aktualizacji');
+      setError(err instanceof Error ? err.message : 'Blad aktualizacji');
     }
   };
 
@@ -161,13 +196,13 @@ export function AdminPanel() {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Błąd resetowania hasła');
+        throw new Error(data.error || 'Blad resetowania hasla');
       }
 
       setResetPasswordUser(null);
       setNewPassword('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Błąd resetowania hasła');
+      setError(err instanceof Error ? err.message : 'Blad resetowania hasla');
     }
   };
 
@@ -184,12 +219,12 @@ export function AdminPanel() {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Błąd zmiany statusu');
+        throw new Error(data.error || 'Blad zmiany statusu');
       }
 
       fetchUsers();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Błąd zmiany statusu');
+      setError(err instanceof Error ? err.message : 'Blad zmiany statusu');
     }
   };
 
@@ -212,16 +247,119 @@ export function AdminPanel() {
       const data = await response.json();
       setFixResult(data);
     } catch (err) {
-      setFixResult({ message: 'Błąd naprawy wpisów' });
+      setFixResult({ message: 'Blad naprawy wpisow' });
     } finally {
       setIsFixing(false);
     }
   };
 
+  // ── Settings handlers ──────────────────────────────────────────────
+
+  const handleSaveSetting = async (key: string) => {
+    setSettingSaving(true);
+    setError('');
+
+    try {
+      const response = await fetch(`${API_URL}/admin/settings/${key}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ value: settingValue }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Blad zapisu ustawienia');
+      }
+
+      setEditingSetting(null);
+      setSettingValue('');
+      fetchSettings();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Blad zapisu ustawienia');
+    } finally {
+      setSettingSaving(false);
+    }
+  };
+
+  const handleDeleteSetting = async (key: string) => {
+    try {
+      const response = await fetch(`${API_URL}/admin/settings/${key}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Blad usuwania ustawienia');
+      }
+
+      fetchSettings();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Blad usuwania ustawienia');
+    }
+  };
+
+  const handleTestConnection = async (service: 'clickup' | 'notion') => {
+    setTestingService(service);
+    setTestResults((prev) => ({ ...prev, [service]: null }));
+
+    try {
+      const response = await fetch(`${API_URL}/admin/settings/test-${service}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      const data = await response.json();
+      setTestResults((prev) => ({ ...prev, [service]: data }));
+    } catch {
+      setTestResults((prev) => ({ ...prev, [service]: { success: false, message: 'Blad polaczenia' } }));
+    } finally {
+      setTestingService(null);
+    }
+  };
+
+  const startEditingSetting = (setting: SettingItem) => {
+    setEditingSetting(setting.key);
+    // For non-secret values from DB, pre-fill; for secrets, start empty
+    setSettingValue(setting.is_secret ? '' : (setting.value || ''));
+  };
+
+  // ── Rendering helpers ──────────────────────────────────────────────
+
+  const sourceBadge = (source: 'db' | 'env' | 'default') => {
+    const styles: Record<string, string> = {
+      db: 'bg-blue-500/20 text-blue-300',
+      env: 'bg-amber-500/20 text-amber-300',
+      default: 'bg-zinc-500/20 text-zinc-400',
+    };
+    const labels: Record<string, string> = {
+      db: 'DB',
+      env: 'ENV',
+      default: 'DEFAULT',
+    };
+    return (
+      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${styles[source]}`}>
+        {labels[source]}
+      </span>
+    );
+  };
+
+  const isTestable = (key: string) =>
+    key === 'CLICKUP_API_TOKEN' || key === 'NOTION_API_KEY';
+
+  const getTestService = (key: string): 'clickup' | 'notion' | null => {
+    if (key === 'CLICKUP_API_TOKEN') return 'clickup';
+    if (key === 'NOTION_API_KEY') return 'notion';
+    return null;
+  };
+
   if (isLoading) {
     return (
       <div className="p-6">
-        <div className="text-muted-foreground">Ładowanie użytkowników...</div>
+        <div className="text-muted-foreground">Ladowanie uzytkownikow...</div>
       </div>
     );
   }
@@ -234,7 +372,7 @@ export function AdminPanel() {
           onClick={() => setShowCreateForm(true)}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-lg transition-colors hover:bg-primary/90"
         >
-          + Nowy użytkownik
+          + Nowy uzytkownik
         </button>
       </div>
 
@@ -245,9 +383,9 @@ export function AdminPanel() {
         </div>
       )}
 
-      {/* Narzędzia administracyjne */}
+      {/* Narzedzia administracyjne */}
       <div className="bg-card rounded-2xl border border-border p-4 mb-6">
-        <h2 className="text-lg font-semibold text-foreground mb-3">Narzędzia</h2>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Narzedzia</h2>
         <div className="flex flex-wrap gap-3 items-center">
           <button
             onClick={handleFixDurations}
@@ -263,15 +401,148 @@ export function AdminPanel() {
           )}
         </div>
         <p className="text-xs text-muted-foreground mt-2">
-          Oblicza duration na podstawie start_time i end_time dla wpisów które mają duration=0
+          Oblicza duration na podstawie start_time i end_time dla wpisow ktore maja duration=0
         </p>
+      </div>
+
+      {/* ── Settings Section ────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl border border-border p-4 mb-6">
+        <h2 className="text-lg font-semibold text-foreground mb-3">Ustawienia systemu</h2>
+
+        {/* Test connection results */}
+        {(testResults.clickup || testResults.notion) && (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {testResults.clickup && (
+              <div className={`text-sm px-3 py-1.5 rounded-lg ${
+                testResults.clickup.success
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-destructive/15 text-destructive'
+              }`}>
+                ClickUp: {testResults.clickup.message}
+              </div>
+            )}
+            {testResults.notion && (
+              <div className={`text-sm px-3 py-1.5 rounded-lg ${
+                testResults.notion.success
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-destructive/15 text-destructive'
+              }`}>
+                Notion: {testResults.notion.message}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Klucz</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Wartosc</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Zrodlo</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Akcje</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {settings.map((setting) => (
+                <tr key={setting.key} className={setting.is_restart_required ? 'opacity-60' : ''}>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono text-foreground">{setting.key}</span>
+                      {setting.is_restart_required && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-500/20 text-orange-300">
+                          restart
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{setting.description}</div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {editingSetting === setting.key ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type={setting.is_secret ? 'password' : 'text'}
+                          value={settingValue}
+                          onChange={(e) => setSettingValue(e.target.value)}
+                          className="w-full max-w-xs px-2 py-1 bg-background border border-border rounded text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                          autoFocus
+                          placeholder={setting.is_secret ? 'Wpisz nowa wartosc...' : ''}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveSetting(setting.key);
+                            if (e.key === 'Escape') { setEditingSetting(null); setSettingValue(''); }
+                          }}
+                        />
+                        <button
+                          onClick={() => handleSaveSetting(setting.key)}
+                          disabled={settingSaving || !settingValue.trim()}
+                          className="px-2 py-1 bg-emerald-600 text-white text-xs rounded hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          {settingSaving ? '...' : 'Zapisz'}
+                        </button>
+                        <button
+                          onClick={() => { setEditingSetting(null); setSettingValue(''); }}
+                          className="px-2 py-1 text-muted-foreground hover:text-foreground text-xs"
+                        >
+                          Anuluj
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-sm font-mono text-muted-foreground">
+                        {setting.maskedValue || <span className="italic text-zinc-500">brak</span>}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {sourceBadge(setting.source)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    {!setting.is_restart_required && editingSetting !== setting.key && (
+                      <>
+                        <button
+                          onClick={() => startEditingSetting(setting)}
+                          className="px-2 py-1 text-foreground/80 hover:text-foreground text-xs"
+                        >
+                          Edytuj
+                        </button>
+                        {setting.source === 'db' && (
+                          <button
+                            onClick={() => handleDeleteSetting(setting.key)}
+                            className="px-2 py-1 text-destructive/80 hover:text-destructive text-xs"
+                          >
+                            Usun z DB
+                          </button>
+                        )}
+                        {isTestable(setting.key) && (
+                          <button
+                            onClick={() => handleTestConnection(getTestService(setting.key)!)}
+                            disabled={testingService !== null}
+                            className="px-2 py-1 text-blue-400 hover:text-blue-300 text-xs disabled:opacity-50"
+                          >
+                            {testingService === getTestService(setting.key) ? 'Testuje...' : 'Testuj'}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-3 flex gap-4 text-[11px] text-muted-foreground">
+          <span><span className="px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 text-[10px] font-semibold">DB</span> = zapisano w panelu</span>
+          <span><span className="px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-semibold">ENV</span> = z pliku .env</span>
+          <span><span className="px-1 py-0.5 rounded bg-zinc-500/20 text-zinc-400 text-[10px] font-semibold">DEFAULT</span> = wartosc domyslna</span>
+          <span><span className="px-1 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-semibold">restart</span> = wymaga restartu serwera</span>
+        </div>
       </div>
 
       {/* Create User Modal */}
       {showCreateForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[var(--menu-bg)] p-6 rounded-2xl border border-border w-full max-w-md">
-            <h2 className="text-xl font-bold text-foreground mb-4">Nowy użytkownik</h2>
+            <h2 className="text-xl font-bold text-foreground mb-4">Nowy uzytkownik</h2>
             <form onSubmit={handleCreateUser} className="space-y-4">
               <div>
                 <label className="block text-sm text-muted-foreground mb-1">Username</label>
@@ -285,7 +556,7 @@ export function AdminPanel() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Hasło</label>
+                <label className="block text-sm text-muted-foreground mb-1">Haslo</label>
                 <input
                   type="password"
                   value={newPassword}
@@ -296,7 +567,7 @@ export function AdminPanel() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Nazwa wyświetlana</label>
+                <label className="block text-sm text-muted-foreground mb-1">Nazwa wyswietlana</label>
                 <input
                   type="text"
                   value={newDisplayName}
@@ -317,7 +588,7 @@ export function AdminPanel() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Powiązany pracownik (ClickUp)</label>
+                <label className="block text-sm text-muted-foreground mb-1">Powiazany pracownik (ClickUp)</label>
                 <select
                   value={newClickupUserId}
                   onChange={(e) => setNewClickupUserId(e.target.value)}
@@ -332,7 +603,7 @@ export function AdminPanel() {
                   ))}
                 </select>
                 {newRole !== 'admin' && !newClickupUserId && (
-                  <p className="text-xs text-destructive mt-1">Dla user/pm wymagane powiązanie</p>
+                  <p className="text-xs text-destructive mt-1">Dla user/pm wymagane powiazanie</p>
                 )}
               </div>
               <div className="flex gap-3 mt-6">
@@ -340,7 +611,7 @@ export function AdminPanel() {
                   type="submit"
                   className="flex-1 py-2 bg-foreground text-background rounded transition-colors hover:bg-foreground/90"
                 >
-                  Utwórz
+                  Utworz
                 </button>
                 <button
                   type="button"
@@ -362,7 +633,7 @@ export function AdminPanel() {
             <h2 className="text-xl font-bold text-foreground mb-4">Edytuj: {editingUser.username}</h2>
             <form onSubmit={handleUpdateUser} className="space-y-4">
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Nazwa wyświetlana</label>
+                <label className="block text-sm text-muted-foreground mb-1">Nazwa wyswietlana</label>
                 <input
                   type="text"
                   value={newDisplayName}
@@ -383,11 +654,11 @@ export function AdminPanel() {
                   <option value="admin">Admin</option>
                 </select>
                 {editingUser.id === currentUser?.id && (
-                  <p className="text-xs text-muted-foreground mt-1">Nie możesz zmienić własnej roli</p>
+                  <p className="text-xs text-muted-foreground mt-1">Nie mozesz zmienic wlasnej roli</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Powiązany pracownik (ClickUp)</label>
+                <label className="block text-sm text-muted-foreground mb-1">Powiazany pracownik (ClickUp)</label>
                 <select
                   value={newClickupUserId}
                   onChange={(e) => setNewClickupUserId(e.target.value)}
@@ -402,7 +673,7 @@ export function AdminPanel() {
                   ))}
                 </select>
                 {newRole !== 'admin' && !newClickupUserId && (
-                  <p className="text-xs text-destructive mt-1">Dla user/pm wymagane powiązanie</p>
+                  <p className="text-xs text-destructive mt-1">Dla user/pm wymagane powiazanie</p>
                 )}
               </div>
               <div className="flex gap-3 mt-6">
@@ -429,10 +700,10 @@ export function AdminPanel() {
       {resetPasswordUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[var(--menu-bg)] p-6 rounded-2xl border border-border w-full max-w-md">
-            <h2 className="text-xl font-bold text-foreground mb-4">Reset hasła: {resetPasswordUser.username}</h2>
+            <h2 className="text-xl font-bold text-foreground mb-4">Reset hasla: {resetPasswordUser.username}</h2>
             <form onSubmit={handleResetPassword} className="space-y-4">
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Nowe hasło</label>
+                <label className="block text-sm text-muted-foreground mb-1">Nowe haslo</label>
                 <input
                   type="password"
                   value={newPassword}
@@ -447,7 +718,7 @@ export function AdminPanel() {
                   type="submit"
                   className="flex-1 py-2 bg-foreground text-background rounded transition-colors hover:bg-foreground/90"
                 >
-                  Zmień hasło
+                  Zmien haslo
                 </button>
                 <button
                   type="button"
@@ -470,7 +741,7 @@ export function AdminPanel() {
               <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Username</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Nazwa</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Rola</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Powiązanie</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Powiazanie</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Status</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Ostatnie logowanie</th>
               <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Akcje</th>
@@ -516,7 +787,7 @@ export function AdminPanel() {
                     onClick={() => setResetPasswordUser(user)}
                     className="px-2 py-1 text-muted-foreground hover:text-foreground text-sm"
                   >
-                    Hasło
+                    Haslo
                   </button>
                   {user.id !== currentUser?.id && (
                     <button

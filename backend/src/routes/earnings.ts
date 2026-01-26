@@ -4,6 +4,7 @@ import { db, upsertTask, upsertUser } from '../database.js';
 import { AuthenticatedRequest } from '../types/auth.js';
 import { fetchClickUpTask, fetchClickUpTeamMembers, fetchClickUpTimeEntries, getClickUpTeamId } from '../clickup.js';
 import { getScope, requireWorkerLink } from '../auth/scope.js';
+import { MAX_ENTRY_DURATION_MS, DURATION_FILTER_SQL } from '../constants.js';
 
 export const earningsRouter = Router();
 
@@ -14,6 +15,8 @@ const DEDUPED_PROJECTS = `
   (SELECT
      clickup_id,
      MAX(hourly_rate) as hourly_rate,
+     MAX(monthly_budget) as monthly_budget,
+     MAX(is_internal) as is_internal,
      MAX(name) as name
    FROM notion_projects
    WHERE clickup_id IS NOT NULL
@@ -36,6 +39,11 @@ function getDateRange(period: string): { start: string; end: string; period: str
   switch (period) {
     case 'today': {
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      break;
+    }
+    case 'yesterday': {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       break;
     }
     case 'week': {
@@ -156,6 +164,35 @@ function resolveImportRange(req: AuthenticatedRequest): { start: Date; end: Date
   };
 }
 
+// CTE: oblicza przychód dla projektów z budżetem miesięcznym (np. EFF/SEO 2500 PLN/mies.)
+// budget_revenue = monthly_budget × liczba unikalnych miesięcy z wpisami w zakresie dat
+// budget_total_hours = łączne godziny projektu - do proporcjonalnego rozdziału przychodu
+function buildProjectBudgetCTE(userClause: string = ''): string {
+  return `project_budget AS (
+    SELECT np.clickup_id,
+      np.monthly_budget * COUNT(DISTINCT strftime('%Y-%m', te.start_time)) as budget_revenue,
+      NULLIF(SUM(te.duration / 3600000.0), 0) as budget_total_hours
+    FROM time_entries te
+    JOIN tasks t ON t.id = te.task_id
+    JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0
+    JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+    WHERE te.end_time IS NOT NULL
+      AND te.start_time >= ? AND te.start_time <= ?
+      ${userClause}
+    GROUP BY np.clickup_id
+  )`;
+}
+
+// Wyrażenie SQL na przychód per wpis: budżetowy (proporcjonalnie) lub godzinowy.
+// Projekty wewnętrzne (is_internal=1) mają przychód 0 — generują tylko koszty.
+const ENTRY_REVENUE = `
+  CASE
+    WHEN np.is_internal = 1 THEN 0
+    WHEN pb.clickup_id IS NOT NULL AND pb.budget_total_hours > 0
+    THEN (te.duration / 3600000.0) / pb.budget_total_hours * pb.budget_revenue
+    ELSE (te.duration / 3600000.0) * np.hourly_rate
+  END`;
+
 earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
   try {
     const scope = getScope(req);
@@ -165,33 +202,33 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
     if (!isAdmin && !userFilter) {
       return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
     }
-    if (!isAdmin && !userFilter) {
-      return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
-    }
-    if (!isAdmin && !userFilter) {
-      return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
-    }
-    if (!isAdmin && !userFilter) {
-      return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
-    }
+
+    const userClause = userFilter ? 'AND te.user_id = ?' : '';
+    const cte = buildProjectBudgetCTE(userClause);
+    const baseParams = userFilter ? [start, end, userFilter] : [start, end];
+    // CTE params + main query params
+    const params = [...baseParams, ...baseParams];
 
     const mappedTotals = isAdmin
       ? (db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               COALESCE(SUM(te.duration), 0) as total_duration,
-              ROUND(COALESCE(SUM((te.duration / 3600000.0) * np.hourly_rate), 0), 2) as total_revenue,
+              ROUND(COALESCE(SUM(${ENTRY_REVENUE}), 0), 2) as total_revenue,
               ROUND(COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as total_cost,
-              ROUND(COALESCE(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 0), 2) as total_profit,
+              ROUND(COALESCE(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as total_profit,
               ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as total_hours
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
-               AND te.start_time >= ? AND te.start_time <= ?`
+               AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}`
           )
-          .get(start, end) as {
+          .get(...params) as {
           total_duration: number;
           total_revenue: number;
           total_cost: number;
@@ -200,19 +237,22 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
         })
       : (db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               COALESCE(SUM(te.duration), 0) as total_duration,
-              ROUND(COALESCE(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 0), 2) as total_profit,
+              ROUND(COALESCE(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as total_profit,
               ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as total_hours
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
-               ${userFilter ? 'AND te.user_id = ?' : ''}`
+               ${DURATION_FILTER_SQL}
+               ${userClause}`
           )
-          .get(...(userFilter ? [start, end, userFilter] : [start, end])) as {
+          .get(...params) as {
           total_duration: number;
           total_profit: number;
           total_hours: number;
@@ -221,12 +261,13 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
     const totalEntries = db
       .prepare(
         `SELECT COUNT(*) as count
-         FROM time_entries
-         WHERE end_time IS NOT NULL
-           AND start_time >= ? AND start_time <= ?
-           ${userFilter ? 'AND user_id = ?' : ''}`
+         FROM time_entries te
+         WHERE te.end_time IS NOT NULL
+           AND te.start_time >= ? AND te.start_time <= ?
+           ${DURATION_FILTER_SQL}
+           ${userClause}`
       )
-      .get(...(userFilter ? [start, end, userFilter] : [start, end])) as { count: number };
+      .get(...baseParams) as { count: number };
 
     const mappedEntries = db
       .prepare(
@@ -237,9 +278,10 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
-           ${userFilter ? 'AND te.user_id = ?' : ''}`
+           ${DURATION_FILTER_SQL}
+           ${userClause}`
       )
-      .get(...(userFilter ? [start, end, userFilter] : [start, end])) as { count: number };
+      .get(...baseParams) as { count: number };
 
     res.json({
       period,
@@ -264,49 +306,60 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
     const isAdmin = scope.isAdmin;
     const userFilter = isAdmin ? null : requireWorkerLink(scope.appUser);
 
+    const userClause = userFilter ? 'AND te.user_id = ?' : '';
+    const cte = buildProjectBudgetCTE(userClause);
+    const baseParams = userFilter ? [start, end, userFilter] : [start, end];
+    const params = [...baseParams, ...baseParams];
+
     const rows = isAdmin
       ? db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               nw.clickup_user_id as user_id,
               nw.name as user_name,
               nw.hourly_rate as worker_rate,
               ROUND(SUM(te.duration) / 3600000.0, 2) as hours_worked,
-              ROUND(SUM((te.duration / 3600000.0) * np.hourly_rate), 2) as revenue,
+              ROUND(SUM(${ENTRY_REVENUE}), 2) as revenue,
               ROUND(SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as cost,
-              ROUND(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 2) as profit,
+              ROUND(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as profit,
               COUNT(DISTINCT te.task_id) as tasks_count,
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
              GROUP BY nw.clickup_user_id
              ORDER BY revenue DESC`
           )
-          .all(start, end)
+          .all(...params)
       : db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               nw.clickup_user_id as user_id,
               nw.name as user_name,
               nw.hourly_rate as worker_rate,
               ROUND(SUM(te.duration) / 3600000.0, 2) as hours_worked,
-              ROUND(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 2) as profit,
+              ROUND(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as profit,
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
                AND te.user_id = ?
              GROUP BY nw.clickup_user_id
              ORDER BY profit DESC`
           )
-          .all(start, end, userFilter);
+          .all(...params);
 
     res.json({ period, start, end, users: rows });
   } catch (error) {
@@ -321,17 +374,24 @@ earningsRouter.get('/by-project', (req: AuthenticatedRequest, res: Response) => 
     const isAdmin = scope.isAdmin;
     const userFilter = isAdmin ? null : requireWorkerLink(scope.appUser);
 
+    const userClause = userFilter ? 'AND te.user_id = ?' : '';
+    const cte = buildProjectBudgetCTE(userClause);
+    const baseParams = userFilter ? [start, end, userFilter] : [start, end];
+    const params = [...baseParams, ...baseParams];
+
     const rows = isAdmin
       ? db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               np.clickup_id as project_clickup_id,
               np.name as project_name,
               np.hourly_rate as project_rate,
+              np.monthly_budget as monthly_budget,
               ROUND(SUM(te.duration) / 3600000.0, 2) as hours_worked,
-              ROUND(SUM((te.duration / 3600000.0) * np.hourly_rate), 2) as revenue,
+              ROUND(SUM(${ENTRY_REVENUE}), 2) as revenue,
               ROUND(SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as cost,
-              ROUND(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 2) as profit,
+              ROUND(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as profit,
               COUNT(DISTINCT nw.clickup_user_id) as workers_count,
               COUNT(DISTINCT te.task_id) as tasks_count,
               COUNT(te.id) as entries_count
@@ -339,32 +399,37 @@ earningsRouter.get('/by-project', (req: AuthenticatedRequest, res: Response) => 
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
              GROUP BY np.clickup_id
              ORDER BY revenue DESC`
           )
-          .all(start, end)
+          .all(...params)
       : db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               np.clickup_id as project_clickup_id,
               np.name as project_name,
               ROUND(SUM(te.duration) / 3600000.0, 2) as hours_worked,
-              ROUND(SUM((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate)), 2) as profit,
+              ROUND(SUM(${ENTRY_REVENUE}) - SUM((te.duration / 3600000.0) * nw.hourly_rate), 2) as profit,
               COUNT(DISTINCT nw.clickup_user_id) as workers_count,
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
                AND te.user_id = ?
              GROUP BY np.clickup_id
              ORDER BY profit DESC`
           )
-          .all(start, end, userFilter);
+          .all(...params);
 
     res.json({ period, start, end, projects: rows });
   } catch (error) {
@@ -384,10 +449,15 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
       return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
     }
 
+    const userClause = userFilter ? 'AND te.user_id = ?' : '';
+    const cte = buildProjectBudgetCTE(userClause);
+    const baseParams = userFilter ? [start, end, userFilter] : [start, end];
+
     const rows = isAdmin
       ? db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               te.id,
               te.task_id,
               te.task_name,
@@ -400,24 +470,28 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
               np.clickup_id as project_clickup_id,
               np.name as project_name,
               np.hourly_rate as project_rate,
+              np.monthly_budget as monthly_budget,
               t.list_id as clickup_list_id,
               ROUND(te.duration / 3600000.0, 2) as hours_worked,
-              ROUND((te.duration / 3600000.0) * np.hourly_rate, 2) as revenue,
+              ROUND(${ENTRY_REVENUE}, 2) as revenue,
               ROUND((te.duration / 3600000.0) * nw.hourly_rate, 2) as cost,
-              ROUND((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate), 2) as profit
+              ROUND((${ENTRY_REVENUE}) - (te.duration / 3600000.0) * nw.hourly_rate, 2) as profit
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
              ORDER BY te.end_time DESC
              LIMIT ? OFFSET ?`
           )
-          .all(start, end, limit, offset)
+          .all(...baseParams, ...baseParams, limit, offset)
       : db
           .prepare(
-            `SELECT
+            `WITH ${cte}
+             SELECT
               te.id,
               te.task_id,
               te.task_name,
@@ -430,18 +504,20 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
               np.name as project_name,
               t.list_id as clickup_list_id,
               ROUND(te.duration / 3600000.0, 2) as hours_worked,
-              ROUND((te.duration / 3600000.0) * (np.hourly_rate - nw.hourly_rate), 2) as profit
+              ROUND((${ENTRY_REVENUE}) - (te.duration / 3600000.0) * nw.hourly_rate, 2) as profit
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
              JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
                AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}
                AND te.user_id = ?
              ORDER BY te.end_time DESC
              LIMIT ? OFFSET ?`
           )
-          .all(start, end, userFilter, limit, offset);
+          .all(...baseParams, ...baseParams, limit, offset);
 
     const total = db
       .prepare(
@@ -452,9 +528,10 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
-           ${userFilter ? 'AND te.user_id = ?' : ''}`
+           ${DURATION_FILTER_SQL}
+           ${userClause}`
       )
-      .get(...(userFilter ? [start, end, userFilter] : [start, end])) as { count: number };
+      .get(...baseParams) as { count: number };
 
     res.json({ period, start, end, limit, offset, total: total.count, entries: rows });
   } catch (error) {
@@ -495,6 +572,7 @@ earningsRouter.get('/unmapped', requireRole('admin'), (req: AuthenticatedRequest
          LEFT JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
+           ${DURATION_FILTER_SQL}
            AND (
              t.id IS NULL OR t.list_id IS NULL OR np.clickup_id IS NULL OR nw.clickup_user_id IS NULL
            )
@@ -512,6 +590,7 @@ earningsRouter.get('/unmapped', requireRole('admin'), (req: AuthenticatedRequest
          LEFT JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
+           ${DURATION_FILTER_SQL}
            AND (
              t.id IS NULL OR t.list_id IS NULL OR np.clickup_id IS NULL OR nw.clickup_user_id IS NULL
            )`
@@ -588,14 +667,21 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
     const startMs = start.getTime();
     const endMs = end.getTime();
 
+    console.log(`\n📦 [IMPORT] Start importu time entries`);
+    console.log(`   Zakres: ${start.toISOString().split('T')[0]} → ${end.toISOString().split('T')[0]} (${label})`);
+    console.log(`   Team ID: ${teamId}, limit: ${limit}/stronę`);
+
     const taskCache = new Map<string, Awaited<ReturnType<typeof fetchClickUpTask>>>();
     let assigneeIds: string[] = [];
 
     if (assigneeParam) {
       assigneeIds = assigneeParam.split(',').map((id) => id.trim()).filter(Boolean);
+      console.log(`   Assignees (ręcznie): ${assigneeIds.join(', ')}`);
     } else {
+      console.log(`   Pobieram listę członków zespołu...`);
       const members = await fetchClickUpTeamMembers(teamId);
       assigneeIds = members.map((member) => String(member.id));
+      console.log(`   Znaleziono ${members.length} członków: ${members.map(m => m.username).join(', ')}`);
 
       // Zapisz wszystkich członków do tabeli users, żeby lista była pełna
       for (const member of members) {
@@ -678,8 +764,12 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
     let skipped = 0;
     let totalPages = 0;
 
+    let assigneeIndex = 0;
     for (const assigneeId of assigneeIds) {
+      assigneeIndex++;
       let page = 0;
+      let assigneeFetched = 0;
+      console.log(`\n   👤 [${assigneeIndex}/${assigneeIds.length}] Pobieram wpisy dla użytkownika ${assigneeId}...`);
 
       while (true) {
         const entries = await fetchClickUpTimeEntries({
@@ -693,11 +783,14 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
         });
 
         if (entries.length === 0) {
+          if (page === 0) console.log(`      Brak wpisów`);
           break;
         }
 
         totalFetched += entries.length;
+        assigneeFetched += entries.length;
         totalPages += 1;
+        console.log(`      Strona ${page + 1}: ${entries.length} wpisów (łącznie: ${assigneeFetched})`);
 
         const normalized: Array<{
           id: string;
@@ -731,6 +824,14 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
           const startValue = Number(entry.start ?? (entry as any).start_time);
           const endValue = Number(entry.end ?? (entry as any).end_time);
           const durationValue = Number(entry.duration ?? 0);
+
+          // Pomijaj wpisy z absurdalnie długim czasem (np. zostawiony timer na kilka dni)
+          if (durationValue > MAX_ENTRY_DURATION_MS) {
+            const hrs = Math.round(durationValue / 3600000);
+            console.log(`      ⚠️ Pomijam wpis ${entryId}: ${hrs}h (max ${MAX_ENTRY_DURATION_MS / 3600000}h)`);
+            skipped += 1;
+            continue;
+          }
 
           const startIso = Number.isFinite(startValue) ? new Date(startValue).toISOString() : null;
           const endIso = Number.isFinite(endValue) ? new Date(endValue).toISOString() : null;
@@ -792,6 +893,10 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
       }
     }
 
+    console.log(`\n✅ [IMPORT] Zakończono!`);
+    console.log(`   Pobrano: ${totalFetched} wpisów, Zapisano: ${totalSaved}, Pominięto: ${skipped}`);
+    console.log(`   Stron API: ${totalPages}, Członków: ${assigneeIds.length}, Tasków w cache: ${taskCache.size}\n`);
+
     res.json({
       range: label,
       start: start.toISOString(),
@@ -803,6 +908,7 @@ earningsRouter.post('/import-time-entries', requireRole('admin'), async (req: Au
       assignees: assigneeIds.length,
     });
   } catch (error) {
+    console.error(`\n❌ [IMPORT] Błąd:`, error instanceof Error ? error.message : error);
     res.status(500).json({
       error: 'Błąd importu historii time trackingu',
       details: error instanceof Error ? error.message : 'Nieznany błąd',

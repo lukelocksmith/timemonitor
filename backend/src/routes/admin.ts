@@ -7,7 +7,12 @@ import {
   createAppUser,
   updateAppUser,
   updateAppUserPassword,
+  getAllSettings,
+  getSetting,
+  setSetting,
+  deleteSetting,
 } from '../database.js';
+import { getConfig } from '../config.js';
 import { hashPassword } from '../auth/password.js';
 import { requireAuth, requireRole } from '../auth/middleware.js';
 import { AuthenticatedRequest, CreateUserRequest, UpdateUserRequest } from '../types/auth.js';
@@ -246,4 +251,208 @@ adminRouter.post('/fix-durations', (req: AuthenticatedRequest, res: Response) =>
     fixed,
     total: brokenEntries.length,
   });
+});
+
+// ── Settings endpoints ───────────────────────────────────────────────
+
+/** Klucze które można edytować z poziomu UI */
+const ALLOWED_SETTINGS: Record<string, { description: string; is_secret: boolean; is_restart_required: boolean }> = {
+  CLICKUP_API_TOKEN:   { description: 'Token API ClickUp',            is_secret: true,  is_restart_required: false },
+  CLICKUP_TEAM_ID:     { description: 'ID zespołu ClickUp',           is_secret: false, is_restart_required: false },
+  CLICKUP_WEBHOOK_SECRET: { description: 'Webhook secret ClickUp',    is_secret: true,  is_restart_required: false },
+  NOTION_API_KEY:      { description: 'Token API Notion',             is_secret: true,  is_restart_required: false },
+  NOTION_VERSION:      { description: 'Wersja API Notion',            is_secret: false, is_restart_required: false },
+  NOTION_WORKERS_DS:   { description: 'Data source ID workers',       is_secret: false, is_restart_required: false },
+  NOTION_PROJECTS_DS:  { description: 'Data source ID projects',      is_secret: false, is_restart_required: false },
+  NOTION_WORKERS_DB:   { description: 'Database ID workers (Notion)', is_secret: false, is_restart_required: false },
+  NOTION_PROJECTS_DB:  { description: 'Database ID projects (Notion)',is_secret: false, is_restart_required: false },
+  FRONTEND_URL:        { description: 'URL frontendu (CORS)',         is_secret: false, is_restart_required: true  },
+  // Startup-only (read-only in UI)
+  JWT_SECRET:          { description: 'Secret JWT (zmiana wymaga restartu)', is_secret: true,  is_restart_required: true },
+  PORT:                { description: 'Port serwera HTTP',            is_secret: false, is_restart_required: true  },
+  DB_PATH:             { description: 'Ścieżka do bazy SQLite',      is_secret: false, is_restart_required: true  },
+  ADMIN_USERNAME:      { description: 'Login admina (seed)',          is_secret: false, is_restart_required: true  },
+  ADMIN_PASSWORD:      { description: 'Hasło admina (seed)',          is_secret: true,  is_restart_required: true  },
+};
+
+const STARTUP_ONLY_KEYS = new Set(['JWT_SECRET', 'PORT', 'DB_PATH', 'ADMIN_USERNAME', 'ADMIN_PASSWORD']);
+
+function maskValue(value: string): string {
+  if (value.length <= 8) return '••••••••';
+  return value.slice(0, 5) + '•••' + value.slice(-4);
+}
+
+// GET /admin/settings — lista wszystkich ustawień
+adminRouter.get('/settings', (_req: AuthenticatedRequest, res: Response) => {
+  const dbSettings = getAllSettings();
+  const dbMap = new Map(dbSettings.map((s) => [s.key, s]));
+
+  const result: Array<{
+    key: string;
+    value: string | null;
+    maskedValue: string | null;
+    source: 'db' | 'env' | 'default';
+    is_secret: boolean;
+    description: string;
+    is_restart_required: boolean;
+    updated_at: string | null;
+  }> = [];
+
+  for (const [key, meta] of Object.entries(ALLOWED_SETTINGS)) {
+    const dbRow = dbMap.get(key);
+    const envValue = process.env[key] ?? null;
+
+    let value: string | null;
+    let source: 'db' | 'env' | 'default';
+
+    if (dbRow) {
+      value = dbRow.value;
+      source = 'db';
+    } else if (envValue) {
+      value = envValue;
+      source = 'env';
+    } else {
+      value = null;
+      source = 'default';
+    }
+
+    result.push({
+      key,
+      value: meta.is_secret ? null : value,
+      maskedValue: value ? (meta.is_secret ? maskValue(value) : value) : null,
+      source,
+      is_secret: meta.is_secret,
+      description: meta.description,
+      is_restart_required: meta.is_restart_required,
+      updated_at: dbRow?.updated_at ?? null,
+    });
+  }
+
+  res.json(result);
+});
+
+// PUT /admin/settings/:key — upsert wartości
+adminRouter.put('/settings/:key', (req: AuthenticatedRequest, res: Response) => {
+  const key = req.params.key as string;
+  const { value } = req.body;
+
+  if (!ALLOWED_SETTINGS[key]) {
+    return res.status(400).json({ error: `Niedozwolony klucz: ${key}` });
+  }
+
+  if (STARTUP_ONLY_KEYS.has(key)) {
+    return res.status(400).json({ error: `Klucz ${key} wymaga restartu — edycja zablokowana` });
+  }
+
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return res.status(400).json({ error: 'Wartość nie może być pusta' });
+  }
+
+  const meta = ALLOWED_SETTINGS[key];
+  setSetting(key, value.trim(), meta.description, meta.is_secret);
+
+  res.json({ key, message: 'Zaktualizowano' });
+});
+
+// DELETE /admin/settings/:key — usunięcie (powrót do .env fallback)
+adminRouter.delete('/settings/:key', (req: AuthenticatedRequest, res: Response) => {
+  const key = req.params.key as string;
+
+  if (!ALLOWED_SETTINGS[key]) {
+    return res.status(400).json({ error: `Niedozwolony klucz: ${key}` });
+  }
+
+  deleteSetting(key);
+
+  res.json({ key, message: 'Usunięto z DB — aktywna wartość z .env' });
+});
+
+// POST /admin/settings/test-clickup — test połączenia z ClickUp API
+adminRouter.post('/settings/test-clickup', async (_req: AuthenticatedRequest, res: Response) => {
+  const token = getConfig('CLICKUP_API_TOKEN');
+  if (!token) {
+    return res.json({ success: false, message: 'Brak CLICKUP_API_TOKEN' });
+  }
+
+  try {
+    const response = await fetch('https://api.clickup.com/api/v2/team', {
+      headers: { Authorization: token },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return res.json({ success: false, message: `HTTP ${response.status}: ${text.slice(0, 200)}` });
+    }
+
+    const data = await response.json();
+    const teamCount = Array.isArray(data?.teams) ? data.teams.length : 0;
+    res.json({ success: true, message: `Połączono — znaleziono ${teamCount} zespół(ów)` });
+  } catch (err) {
+    res.json({ success: false, message: `Błąd: ${err instanceof Error ? err.message : String(err)}` });
+  }
+});
+
+// POST /admin/settings/test-notion — test połączenia z Notion API
+adminRouter.post('/settings/test-notion', async (_req: AuthenticatedRequest, res: Response) => {
+  const token = getConfig('NOTION_API_KEY');
+  if (!token) {
+    return res.json({ success: false, message: 'Brak NOTION_API_KEY' });
+  }
+
+  const notionVersion = getConfig('NOTION_VERSION', '2022-06-28')!;
+
+  try {
+    const response = await fetch('https://api.notion.com/v1/users', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Notion-Version': notionVersion,
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return res.json({ success: false, message: `HTTP ${response.status}: ${text.slice(0, 200)}` });
+    }
+
+    const data = await response.json();
+    const userCount = Array.isArray(data?.results) ? data.results.length : 0;
+    res.json({ success: true, message: `Połączono — znaleziono ${userCount} użytkownik(ów)` });
+  } catch (err) {
+    res.json({ success: false, message: `Błąd: ${err instanceof Error ? err.message : String(err)}` });
+  }
+});
+
+// ── Projects (is_internal toggle) ────────────────────────────────────
+
+// GET /admin/projects — lista projektów z flagą is_internal
+adminRouter.get('/projects', (_req: AuthenticatedRequest, res: Response) => {
+  const projects = db
+    .prepare(
+      `SELECT id, notion_page_id, clickup_id, name, hourly_rate, monthly_budget,
+              status, tags, is_internal
+       FROM notion_projects
+       ORDER BY name`
+    )
+    .all();
+  res.json(projects);
+});
+
+// PATCH /admin/projects/:id/internal — przełącz is_internal
+adminRouter.patch('/projects/:id/internal', (req: AuthenticatedRequest, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  const { is_internal } = req.body as { is_internal: boolean };
+
+  if (typeof is_internal !== 'boolean') {
+    return res.status(400).json({ error: 'Wymagane pole is_internal (boolean)' });
+  }
+
+  const result = db
+    .prepare('UPDATE notion_projects SET is_internal = ? WHERE id = ?')
+    .run(is_internal ? 1 : 0, id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Projekt nie znaleziony' });
+  }
+
+  res.json({ id, is_internal, message: is_internal ? 'Oznaczono jako wewnętrzny' : 'Oznaczono jako kliencki' });
 });
