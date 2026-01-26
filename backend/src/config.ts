@@ -7,5 +7,11 @@ import { getSetting } from './database.js';
  *   3. defaultValue (hardcoded fallback)
  */
 export function getConfig(key: string, defaultValue?: string): string | null {
-  return getSetting(key) ?? process.env[key] ?? defaultValue ?? null;
+  try {
+    const dbValue = getSetting(key);
+    if (dbValue !== null) return dbValue;
+  } catch {
+    // Tabela app_settings może nie istnieć przed initDatabase() — fallback na env
+  }
+  return process.env[key] ?? defaultValue ?? null;
 }
