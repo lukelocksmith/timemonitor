@@ -31,3 +31,6 @@ npm-debug.log*
 
 # Docker
 .docker/
+
+# Auto Claude data directory
+.auto-claude/

@@ -87,8 +87,7 @@ async function fetchAllRunningTimers(): Promise<RunningTimer[]> {
       if (res.ok) {
         const data: TimeEntryResponse = await res.json();
         console.log(`[POLL] ${member.username}: ${data.data ? `timer (duration: ${data.data.duration})` : 'brak'}`);
-        if (data.data && data.data.duration < 0) {
-          // Ujemny duration = timer aktywny
+        if (data.data) {
           runningTimers.push(data.data);
         }
       } else {
