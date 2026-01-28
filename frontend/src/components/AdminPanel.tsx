@@ -31,6 +31,18 @@ interface SettingItem {
   updated_at: string | null;
 }
 
+interface NotionProject {
+  id: number;
+  notion_page_id: string;
+  clickup_id: string | null;
+  name: string;
+  hourly_rate: number;
+  monthly_budget: number;
+  status: string | null;
+  tags: string | null;
+  is_internal: number;
+}
+
 export function AdminPanel() {
   const { token, user: currentUser } = useAuth();
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -57,6 +69,10 @@ export function AdminPanel() {
   const [settingSaving, setSettingSaving] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string } | null>>({});
   const [testingService, setTestingService] = useState<string | null>(null);
+
+  // Projects state
+  const [projects, setProjects] = useState<NotionProject[]>([]);
+  const [togglingProject, setTogglingProject] = useState<number | null>(null);
 
   const fetchUsers = async () => {
     try {
@@ -105,10 +121,48 @@ export function AdminPanel() {
     }
   };
 
+  const fetchProjects = async () => {
+    try {
+      const response = await fetch(`${API_URL}/admin/projects`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data);
+      }
+    } catch {
+      // projects fetch failure is non-critical
+    }
+  };
+
+  const toggleProjectInternal = async (projectId: number, currentValue: number) => {
+    setTogglingProject(projectId);
+    try {
+      const response = await fetch(`${API_URL}/admin/projects/${projectId}/internal`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ is_internal: currentValue === 0 }),
+      });
+
+      if (response.ok) {
+        fetchProjects();
+      }
+    } catch {
+      setError('Błąd zmiany statusu projektu');
+    } finally {
+      setTogglingProject(null);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchClickupUsers();
     fetchSettings();
+    fetchProjects();
   }, [token]);
 
   const handleCreateUser = async (e: FormEvent) => {
@@ -536,6 +590,70 @@ export function AdminPanel() {
           <span><span className="px-1 py-0.5 rounded bg-zinc-500/20 text-zinc-400 text-[10px] font-semibold">DEFAULT</span> = wartosc domyslna</span>
           <span><span className="px-1 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-semibold">restart</span> = wymaga restartu serwera</span>
         </div>
+      </div>
+
+      {/* ── Projects Section (is_internal toggle) ────────────────────────── */}
+      <div className="bg-card rounded-2xl border border-border p-4 mb-6">
+        <h2 className="text-lg font-semibold text-foreground mb-3">Projekty</h2>
+        <p className="text-xs text-muted-foreground mb-3">
+          Projekty wewnętrzne (np. "important") nie generują przychodu — tylko koszty pracowników.
+        </p>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Nazwa</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Stawka</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Status</th>
+                <th className="px-3 py-2 text-center text-xs font-medium text-muted-foreground">Wewnętrzny</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((project) => (
+                <tr key={project.id} className="border-b border-border/50 hover:bg-muted/30">
+                  <td className="px-3 py-2 text-sm text-foreground">
+                    {project.name}
+                    {project.clickup_id && (
+                      <span className="ml-2 text-[10px] text-muted-foreground">#{project.clickup_id}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-sm text-muted-foreground">
+                    {project.monthly_budget > 0
+                      ? `${project.monthly_budget.toLocaleString('pl-PL')} PLN/mies.`
+                      : project.hourly_rate > 0
+                        ? `${project.hourly_rate.toLocaleString('pl-PL')} PLN/h`
+                        : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-sm text-muted-foreground">{project.status || '—'}</td>
+                  <td className="px-3 py-2 text-center">
+                    <button
+                      onClick={() => toggleProjectInternal(project.id, project.is_internal)}
+                      disabled={togglingProject === project.id}
+                      className={`w-12 h-6 rounded-full transition-colors relative ${
+                        project.is_internal
+                          ? 'bg-amber-500'
+                          : 'bg-zinc-600'
+                      } ${togglingProject === project.id ? 'opacity-50' : ''}`}
+                    >
+                      <span
+                        className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                          project.is_internal ? 'left-7' : 'left-1'
+                        }`}
+                      />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {projects.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            Brak projektów. Zsynchronizuj dane z Notion w zakładce Zarobki.
+          </p>
+        )}
       </div>
 
       {/* Create User Modal */}
