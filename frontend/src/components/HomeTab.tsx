@@ -74,25 +74,33 @@ function formatDurationParts(ms: number): { hours?: string; minutes?: string; se
   };
 }
 
-function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString('pl-PL', {
+function formatTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('pl-PL', {
     hour: '2-digit',
     minute: '2-digit',
   });
 }
 
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('pl-PL', {
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('pl-PL', {
     day: '2-digit',
     month: '2-digit',
   });
 }
 
-function formatEntryTimeRange(start: string, end: string): string {
+function formatEntryTimeRange(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start || !end) return '—';
   const s = new Date(start);
   const e = new Date(end);
-  const sameDay = s.toDateString() === e.toDateString();
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return '—';
 
+  const sameDay = s.toDateString() === e.toDateString();
   const startTime = formatTime(start);
   const endTime = formatTime(end);
 
