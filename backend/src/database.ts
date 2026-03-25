@@ -149,6 +149,17 @@ export async function initDatabase() {
   // Seed admin user jeśli nie istnieje
   await seedAdminUser();
 
+  // Seed domyślnej prowizji od abonamentów (Łukasz 50%, Filip 50%)
+  const existingCommission = getSetting('SUBSCRIPTION_COMMISSION');
+  if (!existingCommission) {
+    setSetting(
+      'SUBSCRIPTION_COMMISSION',
+      JSON.stringify({ '81766381': 0.5, '44435339': 0.5 }),
+      'Prowizja od zysku abonamentów (clickup_user_id → procent)',
+      false
+    );
+  }
+
   console.log('✅ Baza danych zainicjalizowana');
 }
 

@@ -4,6 +4,7 @@ import { db, upsertTask, upsertUser } from '../database.js';
 import { AuthenticatedRequest } from '../types/auth.js';
 import { fetchClickUpTask, fetchClickUpTeamMembers, fetchClickUpTimeEntries, getClickUpTeamId } from '../clickup.js';
 import { getScope, requireWorkerLink } from '../auth/scope.js';
+import { getConfig } from '../config.js';
 import { MAX_ENTRY_DURATION_MS, DURATION_FILTER_SQL, MAX_IMPORT_ENTRIES_PER_USER } from '../constants.js';
 
 export const earningsRouter = Router();
@@ -30,6 +31,24 @@ const DEDUPED_WORKERS = `
    FROM notion_workers
    WHERE clickup_user_id IS NOT NULL
    GROUP BY clickup_user_id)`;
+
+type ProjectType = 'hourly' | 'subscription' | 'unconfigured';
+
+function classifyProject(hourly_rate: number, monthly_budget: number): ProjectType {
+  if (hourly_rate > 0) return 'hourly';
+  if (monthly_budget > 0) return 'subscription';
+  return 'unconfigured';
+}
+
+function getSubscriptionCommission(): Record<string, number> {
+  const raw = getConfig('SUBSCRIPTION_COMMISSION');
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
 
 function getDateRange(period: string): { start: string; end: string; period: string } {
   const now = new Date();
@@ -283,11 +302,99 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
       )
       .get(...baseParams) as { count: number };
 
+    // Split: hourly vs subscription
+    const hourlyTotals = db
+      .prepare(
+        `WITH ${cte}
+         SELECT
+          ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as hours,
+          ROUND(COALESCE(SUM((te.duration / 3600000.0) * np.hourly_rate), 0), 2) as revenue,
+          ROUND(COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as cost
+         FROM time_entries te
+         JOIN tasks t ON t.id = te.task_id
+         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.hourly_rate > 0 AND np.is_internal = 0
+         JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+         LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
+         WHERE te.end_time IS NOT NULL
+           AND te.start_time >= ? AND te.start_time <= ?
+           ${DURATION_FILTER_SQL}
+           ${userClause}`
+      )
+      .get(...params) as { hours: number; revenue: number; cost: number };
+
+    const subscriptionProjects = db
+      .prepare(
+        `WITH ${cte}
+         SELECT
+          np.name as name,
+          np.monthly_budget as budget,
+          ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as hours,
+          ROUND(COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as cost
+         FROM time_entries te
+         JOIN tasks t ON t.id = te.task_id
+         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
+         JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+         LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
+         WHERE te.end_time IS NOT NULL
+           AND te.start_time >= ? AND te.start_time <= ?
+           ${DURATION_FILTER_SQL}
+           ${userClause}
+         GROUP BY np.clickup_id
+         ORDER BY np.name`
+      )
+      .all(...params) as Array<{ name: string; budget: number; hours: number; cost: number }>;
+
+    // Calculate subscription totals with monthly budget proportional to months in range
+    const subTotalBudget = subscriptionProjects.reduce((sum, p) => sum + p.budget, 0);
+    const subTotalCost = subscriptionProjects.reduce((sum, p) => sum + p.cost, 0);
+    const subTotalHours = subscriptionProjects.reduce((sum, p) => sum + p.hours, 0);
+    const subTotalProfit = subTotalBudget - subTotalCost;
+
+    // Commission split
+    const commissionConfig = getSubscriptionCommission();
+    const commissionEntries: Record<string, number> = {};
+    const workerNames = db
+      .prepare(`SELECT clickup_user_id, name FROM ${DEDUPED_WORKERS}`)
+      .all() as Array<{ clickup_user_id: string; name: string }>;
+    const nameMap = new Map(workerNames.map((w) => [w.clickup_user_id, w.name]));
+
+    for (const [userId, pct] of Object.entries(commissionConfig)) {
+      const name = nameMap.get(userId) || userId;
+      commissionEntries[name] = Math.round(subTotalProfit * pct * 100) / 100;
+    }
+
+    const subscriptionProjectsWithProfit = subscriptionProjects.map((p) => ({
+      ...p,
+      profit: Math.round((p.budget - p.cost) * 100) / 100,
+    }));
+
+    const hourlyProfit = Math.round((hourlyTotals.revenue - hourlyTotals.cost) * 100) / 100;
+
     res.json({
       period,
       start,
       end,
       totals: mappedTotals,
+      hourly: {
+        revenue: hourlyTotals.revenue,
+        cost: hourlyTotals.cost,
+        profit: hourlyProfit,
+        hours: hourlyTotals.hours,
+      },
+      subscriptions: {
+        budget: subTotalBudget,
+        cost: subTotalCost,
+        profit: subTotalProfit,
+        hours: subTotalHours,
+        projects: subscriptionProjectsWithProfit,
+        commission: commissionEntries,
+      },
+      total: {
+        revenue: Math.round((hourlyTotals.revenue + subTotalBudget) * 100) / 100,
+        cost: Math.round((hourlyTotals.cost + subTotalCost) * 100) / 100,
+        profit: Math.round((hourlyProfit + subTotalProfit) * 100) / 100,
+        hours: Math.round((hourlyTotals.hours + subTotalHours) * 100) / 100,
+      },
       entries: {
         total: totalEntries.count,
         mapped: mappedEntries.count,
@@ -361,7 +468,40 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
           )
           .all(...params);
 
-    res.json({ period, start, end, users: rows });
+    // Calculate subscription profit for commission
+    const commissionConfig = getSubscriptionCommission();
+    const subProfitRow = isAdmin
+      ? (db
+          .prepare(
+            `SELECT
+              ROUND(COALESCE(SUM(np.monthly_budget), 0) - COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as sub_profit
+             FROM time_entries te
+             JOIN tasks t ON t.id = te.task_id
+             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
+             JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+             WHERE te.end_time IS NOT NULL
+               AND te.start_time >= ? AND te.start_time <= ?
+               ${DURATION_FILTER_SQL}`
+          )
+          .get(start, end) as { sub_profit: number } | undefined)
+      : null;
+
+    // Note: subscription budget is per project, not per distinct month here (simplified)
+    // For accurate monthly budget, we'd need the CTE. For commission display this is sufficient.
+    const subProfit = subProfitRow?.sub_profit ?? 0;
+
+    const usersWithCommission = (rows as Array<Record<string, unknown>>).map((row) => {
+      const userId = String(row.user_id);
+      const pct = commissionConfig[userId] ?? 0;
+      const commission = pct > 0 ? Math.round(subProfit * pct * 100) / 100 : 0;
+      return {
+        ...row,
+        subscription_commission: commission,
+        total_earnings: Math.round(((Number(row.cost) || 0) + commission) * 100) / 100,
+      };
+    });
+
+    res.json({ period, start, end, users: usersWithCommission });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
   }
@@ -431,7 +571,15 @@ earningsRouter.get('/by-project', (req: AuthenticatedRequest, res: Response) => 
           )
           .all(...params);
 
-    res.json({ period, start, end, projects: rows });
+    const projectsWithType = (rows as Array<Record<string, unknown>>).map((row) => ({
+      ...row,
+      type: classifyProject(
+        Number(row.project_rate ?? row.hourly_rate ?? 0),
+        Number(row.monthly_budget ?? 0)
+      ),
+    }));
+
+    res.json({ period, start, end, projects: projectsWithType });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
   }

@@ -24,6 +24,16 @@ type EarningsSummaryResponse = {
     mapped: number;
     unmapped: number;
   };
+  hourly?: { revenue: number; cost: number; profit: number; hours: number };
+  subscriptions?: {
+    budget: number;
+    cost: number;
+    profit: number;
+    hours: number;
+    projects: Array<{ name: string; budget: number; cost: number; profit: number; hours: number }>;
+    commission: Record<string, number>;
+  };
+  total?: { revenue: number; cost: number; profit: number; hours: number };
 };
 
 export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
@@ -109,6 +119,11 @@ export function EarningsTab({ showNotionSync = false }: EarningsTabProps) {
             isAdmin={isAdmin}
             showUnmappedDetails={isUnmappedOpen}
             onToggleUnmapped={isAdmin ? () => setIsUnmappedOpen((prev) => !prev) : undefined}
+            split={{
+              hourly: summary.hourly,
+              subscriptions: summary.subscriptions,
+              total: summary.total,
+            }}
           />
 
           {/* Niezmapowane wpisy - rozwijalna sekcja */}

@@ -10,6 +10,8 @@ export type EarningsUserRow = {
   profit: number;
   tasks_count?: number;
   entries_count: number;
+  subscription_commission?: number;
+  total_earnings?: number;
 };
 
 export function EarningsByUser({
@@ -52,6 +54,12 @@ export function EarningsByUser({
                     Zarobek
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Prowizja
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Suma
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     Przychód
                   </th>
                 </>
@@ -84,6 +92,12 @@ export function EarningsByUser({
                       {formatCurrency(row.cost || 0)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">
+                      {row.subscription_commission ? formatCurrency(row.subscription_commission) : '—'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-highlight-1 font-semibold">
+                      {formatCurrency(row.total_earnings || (row.cost || 0))}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">
                       {formatCurrency(row.revenue || 0)}
                     </td>
                   </>
@@ -95,7 +109,7 @@ export function EarningsByUser({
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 7 : showRate ? 5 : 4} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={isAdmin ? 9 : showRate ? 5 : 4} className="px-6 py-8 text-center text-muted-foreground">
                   Brak danych dla wybranego okresu
                 </td>
               </tr>

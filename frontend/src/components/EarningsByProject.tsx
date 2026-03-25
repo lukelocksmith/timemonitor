@@ -4,6 +4,7 @@ export type EarningsProjectRow = {
   project_clickup_id: string;
   project_name: string;
   project_rate?: number;
+  monthly_budget?: number;
   hours_worked: number;
   revenue?: number;
   cost?: number;
@@ -11,6 +12,7 @@ export type EarningsProjectRow = {
   workers_count?: number;
   tasks_count?: number;
   entries_count: number;
+  type?: 'hourly' | 'subscription' | 'unconfigured';
 };
 
 export function EarningsByProject({ rows, isAdmin }: { rows: EarningsProjectRow[]; isAdmin: boolean }) {
@@ -28,7 +30,7 @@ export function EarningsByProject({ rows, isAdmin }: { rows: EarningsProjectRow[
               </th>
               {isAdmin && (
                 <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Stawka (PLN/h)
+                  Stawka / Budżet
                 </th>
               )}
               <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -57,10 +59,22 @@ export function EarningsByProject({ rows, isAdmin }: { rows: EarningsProjectRow[
               <tr key={row.project_clickup_id}>
                 <td className="px-6 py-4 whitespace-nowrap text-foreground font-medium">
                   {row.project_name}
+                  {row.type === 'subscription' && (
+                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                      Abonament
+                    </span>
+                  )}
+                  {row.type === 'hourly' && (
+                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                      Godzinowy
+                    </span>
+                  )}
                 </td>
                 {isAdmin && (
                   <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">
-                    {formatCurrencyPerHour(row.project_rate || 0)}
+                    {row.type === 'subscription'
+                      ? formatCurrency(row.monthly_budget || 0) + '/mies.'
+                      : formatCurrencyPerHour(row.project_rate || 0)}
                   </td>
                 )}
                 <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">

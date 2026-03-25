@@ -267,6 +267,7 @@ const ALLOWED_SETTINGS: Record<string, { description: string; is_secret: boolean
   NOTION_WORKERS_DB:   { description: 'Database ID workers (Notion)', is_secret: false, is_restart_required: false },
   NOTION_PROJECTS_DB:  { description: 'Database ID projects (Notion)',is_secret: false, is_restart_required: false },
   FRONTEND_URL:        { description: 'URL frontendu (CORS)',         is_secret: false, is_restart_required: true  },
+  SUBSCRIPTION_COMMISSION: { description: 'Prowizja od abonamentów (JSON: {clickup_user_id: procent})', is_secret: false, is_restart_required: false },
   // Startup-only (read-only in UI)
   JWT_SECRET:          { description: 'Secret JWT (zmiana wymaga restartu)', is_secret: true,  is_restart_required: true },
   PORT:                { description: 'Port serwera HTTP',            is_secret: false, is_restart_required: true  },
