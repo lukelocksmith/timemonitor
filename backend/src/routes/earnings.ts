@@ -469,25 +469,36 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
           .all(...params);
 
     // Calculate subscription profit for commission
+    // Must aggregate budget per-project first, then subtract total costs
     const commissionConfig = getSubscriptionCommission();
     const subProfitRow = isAdmin
       ? (db
           .prepare(
             `SELECT
-              ROUND(COALESCE(SUM(np.monthly_budget), 0) - COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as sub_profit
-             FROM time_entries te
-             JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
-             JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
-             WHERE te.end_time IS NOT NULL
-               AND te.start_time >= ? AND te.start_time <= ?
-               ${DURATION_FILTER_SQL}`
+              ROUND(COALESCE(sub.total_budget, 0) - COALESCE(sub.total_cost, 0), 2) as sub_profit
+             FROM (
+               SELECT
+                 SUM(proj_budget) as total_budget,
+                 SUM(proj_cost) as total_cost
+               FROM (
+                 SELECT
+                   np.clickup_id,
+                   np.monthly_budget as proj_budget,
+                   COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0) as proj_cost
+                 FROM time_entries te
+                 JOIN tasks t ON t.id = te.task_id
+                 JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
+                 JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
+                 WHERE te.end_time IS NOT NULL
+                   AND te.start_time >= ? AND te.start_time <= ?
+                   ${DURATION_FILTER_SQL}
+                 GROUP BY np.clickup_id
+               )
+             ) sub`
           )
           .get(start, end) as { sub_profit: number } | undefined)
       : null;
 
-    // Note: subscription budget is per project, not per distinct month here (simplified)
-    // For accurate monthly budget, we'd need the CTE. For commission display this is sufficient.
     const subProfit = subProfitRow?.sub_profit ?? 0;
 
     const usersWithCommission = (rows as Array<Record<string, unknown>>).map((row) => {
