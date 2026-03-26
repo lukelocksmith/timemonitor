@@ -193,7 +193,7 @@ function buildProjectBudgetCTE(userClause: string = ''): string {
       NULLIF(SUM(te.duration / 3600000.0), 0) as budget_total_hours
     FROM time_entries te
     JOIN tasks t ON t.id = te.task_id
-    JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0
+    JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id) AND np.monthly_budget > 0
     JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
     WHERE te.end_time IS NOT NULL
       AND te.start_time >= ? AND te.start_time <= ?
@@ -240,7 +240,7 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
               ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as total_hours
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -263,7 +263,7 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
               ROUND(COALESCE(SUM(te.duration) / 3600000.0, 0), 2) as total_hours
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -293,7 +293,7 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
         `SELECT COUNT(DISTINCT te.id) as count
          FROM time_entries te
          JOIN tasks t ON t.id = te.task_id
-         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+         JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
@@ -312,7 +312,7 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
           ROUND(COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as cost
          FROM time_entries te
          JOIN tasks t ON t.id = te.task_id
-         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.hourly_rate > 0 AND np.is_internal = 0
+         JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id) AND np.hourly_rate > 0 AND np.is_internal = 0
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
          WHERE te.end_time IS NOT NULL
@@ -332,7 +332,7 @@ earningsRouter.get('/summary', (req: AuthenticatedRequest, res: Response) => {
           ROUND(COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0), 2) as cost
          FROM time_entries te
          JOIN tasks t ON t.id = te.task_id
-         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
+         JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id) AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
          WHERE te.end_time IS NOT NULL
@@ -434,7 +434,7 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -456,7 +456,7 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -487,7 +487,7 @@ earningsRouter.get('/by-user', (req: AuthenticatedRequest, res: Response) => {
                    COALESCE(SUM((te.duration / 3600000.0) * nw.hourly_rate), 0) as proj_cost
                  FROM time_entries te
                  JOIN tasks t ON t.id = te.task_id
-                 JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
+                 JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id) AND np.monthly_budget > 0 AND np.hourly_rate = 0 AND np.is_internal = 0
                  JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
                  WHERE te.end_time IS NOT NULL
                    AND te.start_time >= ? AND te.start_time <= ?
@@ -548,7 +548,7 @@ earningsRouter.get('/by-project', (req: AuthenticatedRequest, res: Response) => 
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -570,7 +570,7 @@ earningsRouter.get('/by-project', (req: AuthenticatedRequest, res: Response) => 
               COUNT(te.id) as entries_count
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -637,7 +637,7 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
               ROUND((${ENTRY_REVENUE}) - (te.duration / 3600000.0) * nw.hourly_rate, 2) as profit
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -666,7 +666,7 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
               ROUND((${ENTRY_REVENUE}) - (te.duration / 3600000.0) * nw.hourly_rate, 2) as profit
              FROM time_entries te
              JOIN tasks t ON t.id = te.task_id
-             JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+             JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
              JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
              LEFT JOIN project_budget pb ON pb.clickup_id = np.clickup_id
              WHERE te.end_time IS NOT NULL
@@ -683,7 +683,7 @@ earningsRouter.get('/details', (req: AuthenticatedRequest, res: Response) => {
         `SELECT COUNT(*) as count
          FROM time_entries te
          JOIN tasks t ON t.id = te.task_id
-         JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+         JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
          JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
@@ -727,7 +727,7 @@ earningsRouter.get('/unmapped', requireRole('admin'), (req: AuthenticatedRequest
           END as reason
          FROM time_entries te
          LEFT JOIN tasks t ON t.id = te.task_id
-         LEFT JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+         LEFT JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
          LEFT JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
@@ -745,7 +745,7 @@ earningsRouter.get('/unmapped', requireRole('admin'), (req: AuthenticatedRequest
         `SELECT COUNT(*) as count
          FROM time_entries te
          LEFT JOIN tasks t ON t.id = te.task_id
-         LEFT JOIN ${DEDUPED_PROJECTS} np ON np.clickup_id = t.list_id
+         LEFT JOIN ${DEDUPED_PROJECTS} np ON (np.clickup_id = t.list_id OR np.clickup_id = t.folder_id)
          LEFT JOIN ${DEDUPED_WORKERS} nw ON nw.clickup_user_id = te.user_id
          WHERE te.end_time IS NOT NULL
            AND te.start_time >= ? AND te.start_time <= ?
