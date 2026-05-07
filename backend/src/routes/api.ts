@@ -7,7 +7,6 @@ import { MAX_ENTRY_DURATION_MS } from '../constants.js';
 export const apiRouter = Router();
 
 function backfillMissingListNames() {
-  // Uzupełnij brakujące list_name na podstawie tabeli tasks.
   db.prepare(`
     UPDATE time_entries
     SET list_name = (
@@ -22,10 +21,8 @@ function backfillMissingListNames() {
   `).run();
 }
 
-// Wszystkie endpointy API wymagają autoryzacji
 apiRouter.use(requireAuth);
 
-// Pobierz aktywne sesje (kto teraz pracuje)
 apiRouter.get('/active', (req: Request, res: Response) => {
   const scope = getScope(req as any);
   let whereClause = 'te.end_time IS NULL';
@@ -33,9 +30,6 @@ apiRouter.get('/active', (req: Request, res: Response) => {
 
   if (scope.isUser) {
     const clickupUserId = requireWorkerLink(scope.appUser);
-    if (!clickupUserId) {
-      return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
-    }
     if (!clickupUserId) {
       return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
     }
@@ -52,6 +46,7 @@ apiRouter.get('/active', (req: Request, res: Response) => {
        FROM time_entries te
        LEFT JOIN users u ON te.user_id = u.id
        WHERE ${whereClause}
+         AND (u.hidden IS NULL OR u.hidden = 0)
        ORDER BY te.start_time DESC`
     )
     .all(...params);
@@ -59,7 +54,6 @@ apiRouter.get('/active', (req: Request, res: Response) => {
   res.json(sessions);
 });
 
-// Pobierz historię (ostatnie wpisy)
 apiRouter.get('/history', (req: Request, res: Response) => {
   backfillMissingListNames();
   const scope = getScope(req as any);
@@ -105,13 +99,19 @@ apiRouter.get('/history', (req: Request, res: Response) => {
        FROM time_entries te
        LEFT JOIN users u ON te.user_id = u.id
        WHERE ${whereClause}
+         AND (u.hidden IS NULL OR u.hidden = 0)
        ORDER BY te.end_time DESC
        LIMIT ? OFFSET ?`
     )
     .all(...params);
 
   const total = db
-    .prepare(`SELECT COUNT(*) as count FROM time_entries te WHERE ${whereClause}`)
+    .prepare(
+      `SELECT COUNT(*) as count FROM time_entries te
+       LEFT JOIN users u ON te.user_id = u.id
+       WHERE ${whereClause}
+         AND (u.hidden IS NULL OR u.hidden = 0)`
+    )
     .get(...params.slice(0, params.length - 2)) as { count: number };
 
   res.json({
@@ -122,7 +122,6 @@ apiRouter.get('/history', (req: Request, res: Response) => {
   });
 });
 
-// Pobierz statystyki użytkownika
 apiRouter.get('/user/:userId/stats', (req: Request, res: Response) => {
   const scope = getScope(req as any);
   const userIdParam = req.params.userId;
@@ -168,7 +167,6 @@ apiRouter.get('/user/:userId/stats', (req: Request, res: Response) => {
   res.json({ stats, byTask });
 });
 
-// Pobierz wszystkich użytkowników
 apiRouter.get('/users', (req: Request, res: Response) => {
   const scope = getScope(req as any);
   let whereClause = '';
@@ -190,7 +188,7 @@ apiRouter.get('/users', (req: Request, res: Response) => {
         (SELECT COUNT(*) FROM time_entries WHERE user_id = u.id AND end_time IS NULL) as is_active,
         (SELECT task_name FROM time_entries WHERE user_id = u.id AND end_time IS NULL LIMIT 1) as current_task
        FROM users u
-       ${whereClause}
+       ${whereClause ? whereClause + ' AND u.hidden = 0' : 'WHERE u.hidden = 0'}
        ORDER BY u.username`
     )
     .all(...params);
@@ -198,7 +196,6 @@ apiRouter.get('/users', (req: Request, res: Response) => {
   res.json(users);
 });
 
-// Statystyki dzisiejsze
 apiRouter.get('/stats/today', (req: Request, res: Response) => {
   const scope = getScope(req as any);
   const today = new Date().toISOString().split('T')[0];
@@ -206,18 +203,20 @@ apiRouter.get('/stats/today', (req: Request, res: Response) => {
   if (scope.isUser && !userFilter) {
     return res.status(403).json({ error: 'Brak powiązania z pracownikiem (ClickUp)' });
   }
-  const userCondition = userFilter ? 'AND user_id = ?' : '';
+  const userCondition = userFilter ? 'AND te.user_id = ?' : '';
   const userParams = userFilter ? [userFilter] : [];
 
   const stats = db
     .prepare(
       `SELECT
-        COUNT(DISTINCT user_id) as active_users,
+        COUNT(DISTINCT te.user_id) as active_users,
         COUNT(*) as total_entries,
-        SUM(CASE WHEN end_time IS NULL THEN 1 ELSE 0 END) as currently_active,
-        SUM(CASE WHEN duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS} THEN duration ELSE 0 END) as total_duration
-       FROM time_entries
-       WHERE date(start_time) = ?
+        SUM(CASE WHEN te.end_time IS NULL THEN 1 ELSE 0 END) as currently_active,
+        SUM(CASE WHEN te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS} THEN te.duration ELSE 0 END) as total_duration
+       FROM time_entries te
+       LEFT JOIN users u ON te.user_id = u.id
+       WHERE date(te.start_time) = ?
+         AND (u.hidden IS NULL OR u.hidden = 0)
        ${userCondition}`
     )
     .get(today, ...userParams);
@@ -225,17 +224,19 @@ apiRouter.get('/stats/today', (req: Request, res: Response) => {
   const byUser = db
     .prepare(
       `SELECT
-        user_id,
-        user_name,
+        te.user_id,
+        te.user_name,
         COUNT(*) as entries_count,
-        SUM(CASE WHEN duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS} THEN duration ELSE 0 END) as total_duration,
+        SUM(CASE WHEN te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS} THEN te.duration ELSE 0 END) as total_duration,
         (SELECT end_time IS NULL FROM time_entries t2
-         WHERE t2.user_id = time_entries.user_id
+         WHERE t2.user_id = te.user_id
          ORDER BY start_time DESC LIMIT 1) as is_active
-       FROM time_entries
-       WHERE date(start_time) = ?
+       FROM time_entries te
+       LEFT JOIN users u ON te.user_id = u.id
+       WHERE date(te.start_time) = ?
+         AND (u.hidden IS NULL OR u.hidden = 0)
        ${userCondition}
-       GROUP BY user_id
+       GROUP BY te.user_id
        ORDER BY total_duration DESC`
     )
     .all(today, ...userParams);
@@ -243,7 +244,6 @@ apiRouter.get('/stats/today', (req: Request, res: Response) => {
   res.json({ stats, byUser });
 });
 
-// Helper: oblicz zakres dat
 function getDateRange(period: string): { start: string; end: string } {
   const now = new Date();
   let start: Date;
@@ -253,11 +253,16 @@ function getDateRange(period: string): { start: string; end: string } {
     case 'today':
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       break;
-    case 'week':
+    case 'yesterday':
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      break;
+    case 'week': {
       const dayOfWeek = now.getDay();
-      const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Poniedziałek = start tygodnia
+      const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
       break;
+    }
     case 'month':
       start = new Date(now.getFullYear(), now.getMonth(), 1);
       break;
@@ -275,7 +280,6 @@ function getDateRange(period: string): { start: string; end: string } {
   };
 }
 
-// Statystyki wszystkich użytkowników z filtrem czasowym
 apiRouter.get('/stats/team', (req: Request, res: Response) => {
   const scope = getScope(req as any);
   const period = req.query.period as string | undefined;
@@ -285,9 +289,7 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
   let start: string;
   let end: string;
 
-  // Jeśli podano start i end, użyj ich (custom range)
   if (startParam && endParam) {
-    // Zakładamy format YYYY-MM-DD, konwertujemy na pełne ISO
     const startDate = new Date(startParam);
     const endDate = new Date(endParam);
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
@@ -296,7 +298,6 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
     start = startDate.toISOString();
     end = endDate.toISOString();
   } else {
-    // Użyj predefiniowanego okresu
     const range = getDateRange(period || 'today');
     start = range.start;
     end = range.end;
@@ -364,6 +365,7 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
          AND te.start_time >= ? AND te.start_time <= ?
          AND te.end_time IS NOT NULL
          AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
+       WHERE u.hidden = 0
        GROUP BY u.id
        ORDER BY total_duration DESC`
     )
@@ -372,13 +374,15 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
   const totals = db
     .prepare(
       `SELECT
-        COALESCE(SUM(duration), 0) as total_duration,
+        COALESCE(SUM(te.duration), 0) as total_duration,
         COUNT(*) as total_entries,
-        COUNT(DISTINCT user_id) as active_users
-       FROM time_entries
-       WHERE start_time >= ? AND start_time <= ?
-         AND end_time IS NOT NULL
-         AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}`
+        COUNT(DISTINCT te.user_id) as active_users
+       FROM time_entries te
+       LEFT JOIN users u ON te.user_id = u.id
+       WHERE te.start_time >= ? AND te.start_time <= ?
+         AND te.end_time IS NOT NULL
+         AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
+         AND (u.hidden IS NULL OR u.hidden = 0)`
     )
     .get(start, end);
 
@@ -391,7 +395,73 @@ apiRouter.get('/stats/team', (req: Request, res: Response) => {
   });
 });
 
-// Historia z filtrem po użytkowniku
+// Breakdown zadań per user w danym okresie (rozwijana lista w Statystykach)
+apiRouter.get('/stats/user-tasks', (req: Request, res: Response) => {
+  const scope = getScope(req as any);
+  const userIdParam = req.query.user_id as string | undefined;
+  const period = req.query.period as string | undefined;
+  const startParam = req.query.start as string | undefined;
+  const endParam = req.query.end as string | undefined;
+
+  const targetUserId = scope.isUser ? requireWorkerLink(scope.appUser) : userIdParam;
+  if (!targetUserId) {
+    return res.status(400).json({ error: 'Wymagany parametr user_id' });
+  }
+  if (scope.isUser && userIdParam && userIdParam !== targetUserId) {
+    return res.status(403).json({ error: 'Brak uprawnień do tych danych' });
+  }
+
+  let start: string;
+  let end: string;
+
+  if (startParam && endParam) {
+    const startDate = new Date(startParam);
+    const endDate = new Date(endParam);
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: 'Nieprawidłowy format daty' });
+    }
+    start = startDate.toISOString();
+    end = endDate.toISOString();
+  } else {
+    const range = getDateRange(period || 'today');
+    start = range.start;
+    end = range.end;
+  }
+
+  const tasks = db
+    .prepare(
+      `SELECT
+        te.task_id,
+        MAX(te.task_name) as task_name,
+        MAX(te.task_url) as task_url,
+        MAX(te.list_name) as list_name,
+        MAX(te.folder_name) as folder_name,
+        MAX(te.space_name) as space_name,
+        SUM(te.duration) as total_duration,
+        COUNT(te.id) as entries_count,
+        MIN(te.start_time) as first_start_time,
+        MAX(te.end_time) as last_end_time
+       FROM time_entries te
+       LEFT JOIN users u ON te.user_id = u.id
+       WHERE te.user_id = ?
+         AND te.start_time >= ? AND te.start_time <= ?
+         AND te.end_time IS NOT NULL
+         AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
+         AND (u.hidden IS NULL OR u.hidden = 0)
+       GROUP BY te.task_id
+       ORDER BY total_duration DESC`
+    )
+    .all(targetUserId, start, end);
+
+  res.json({
+    user_id: targetUserId,
+    period: startParam && endParam ? 'custom' : (period || 'today'),
+    start,
+    end,
+    tasks,
+  });
+});
+
 apiRouter.get('/history/filtered', (req: Request, res: Response) => {
   backfillMissingListNames();
   const scope = getScope(req as any);
@@ -417,6 +487,7 @@ apiRouter.get('/history/filtered', (req: Request, res: Response) => {
     LEFT JOIN users u ON te.user_id = u.id
     WHERE te.end_time IS NOT NULL
       AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
+      AND (u.hidden IS NULL OR u.hidden = 0)
   `;
 
   const params: (string | number)[] = [];
@@ -441,18 +512,22 @@ apiRouter.get('/history/filtered', (req: Request, res: Response) => {
 
   const entries = db.prepare(query).all(...params);
 
-  let countQuery = `SELECT COUNT(*) as count FROM time_entries WHERE end_time IS NOT NULL AND duration > 0 AND duration <= ${MAX_ENTRY_DURATION_MS}`;
+  let countQuery = `SELECT COUNT(*) as count FROM time_entries te
+    LEFT JOIN users u ON te.user_id = u.id
+    WHERE te.end_time IS NOT NULL
+      AND te.duration > 0 AND te.duration <= ${MAX_ENTRY_DURATION_MS}
+      AND (u.hidden IS NULL OR u.hidden = 0)`;
   const countParams: string[] = [];
 
   if (userId) {
-    countQuery += ` AND user_id = ?`;
+    countQuery += ` AND te.user_id = ?`;
     countParams.push(userId);
   }
 
   if (startParam && endParam) {
     const startDate = new Date(startParam);
     const endDate = new Date(endParam);
-    countQuery += ` AND start_time >= ? AND start_time <= ?`;
+    countQuery += ` AND te.start_time >= ? AND te.start_time <= ?`;
     countParams.push(startDate.toISOString(), endDate.toISOString());
   }
 

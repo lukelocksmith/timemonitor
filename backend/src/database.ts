@@ -28,6 +28,12 @@ export async function initDatabase() {
     )
   `).run();
 
+  // Migracja: dodanie hidden do users (ukrywanie nieaktywnych userów spoza ClickUp)
+  const usersCols = db.prepare(`PRAGMA table_info(users)`).all() as Array<{ name: string }>;
+  if (!usersCols.some((c) => c.name === 'hidden')) {
+    db.prepare(`ALTER TABLE users ADD COLUMN hidden INTEGER DEFAULT 0`).run();
+  }
+
   // Tabela zadań
   db.prepare(`
     CREATE TABLE IF NOT EXISTS tasks (
@@ -130,7 +136,6 @@ export async function initDatabase() {
   }
 
   // Migracja: dodanie is_internal do notion_projects
-  // Projekty wewnętrzne (np. "important") nie generują przychodu — tylko koszty.
   if (!projectCols.some((c) => c.name === 'is_internal')) {
     db.prepare(`ALTER TABLE notion_projects ADD COLUMN is_internal INTEGER DEFAULT 0`).run();
   }
@@ -333,7 +338,6 @@ export function upsertUser(user: {
   stmt.run(user.id, user.username, user.email, user.color, user.profilePicture);
 }
 
-// ── app_settings CRUD ────────────────────────────────────────────────
 export type AppSetting = {
   key: string;
   value: string;
