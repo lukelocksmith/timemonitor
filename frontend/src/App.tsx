@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Fragment } from 'react';
 import { Routes, Route, Navigate, Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { useAuth } from './contexts/AuthContext';
@@ -54,6 +54,17 @@ interface TeamStats {
     total_entries: number;
     active_users: number;
   };
+}
+
+interface UserTaskBreakdown {
+  task_id: string;
+  task_name: string;
+  task_url?: string;
+  list_name?: string;
+  folder_name?: string;
+  space_name?: string;
+  total_duration: number;
+  entries_count: number;
 }
 
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -499,10 +510,33 @@ function StatsTab() {
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '', period: 'today' });
   const [stats, setStats] = useState<TeamStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [userTasks, setUserTasks] = useState<Record<string, UserTaskBreakdown[]>>({});
+  const [loadingTasks, setLoadingTasks] = useState<Record<string, boolean>>({});
+
+  const toggleUser = (userId: string, hasTime: boolean) => {
+    if (!hasTime) return;
+    if (expandedUserId === userId) { setExpandedUserId(null); return; }
+    setExpandedUserId(userId);
+    if (userTasks[userId]) return;
+    setLoadingTasks((prev) => ({ ...prev, [userId]: true }));
+    const queryParams = buildDateQueryParams(dateRange);
+    fetch(`${API_URL}/api/stats/user-tasks?user_id=${encodeURIComponent(userId)}&${queryParams}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setUserTasks((prev) => ({ ...prev, [userId]: data.tasks || [] }));
+        setLoadingTasks((prev) => ({ ...prev, [userId]: false }));
+      })
+      .catch(() => setLoadingTasks((prev) => ({ ...prev, [userId]: false })));
+  };
 
   useEffect(() => {
     if (!token || !dateRange.start || !dateRange.end) return;
     setLoading(true);
+    setExpandedUserId(null);
+    setUserTasks({});
     const queryParams = buildDateQueryParams(dateRange);
     fetch(`${API_URL}/api/stats/team?${queryParams}`, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -580,37 +614,100 @@ function StatsTab() {
                   </tr>
                 </thead>
                 <tbody className="bg-card divide-y divide-border">
-                  {stats.users.map((user) => (
-                    <tr key={user.id} className={user.total_duration > 0 ? '' : 'opacity-50'}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-3">
-                          <Avatar
-                            name={user.username}
-                            color={user.color}
-                            avatar={user.profile_picture}
-                            size="sm"
-                          />
-                          <div>
-                            <div className="font-medium text-foreground">{user.username}</div>
-                            {user.email && (
-                              <div className="text-sm text-muted-foreground">{user.email}</div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right">
-                        <span className={`font-mono font-semibold ${user.total_duration > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
-                          {formatDurationLong(user.total_duration)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-muted-foreground">
-                        {user.entries_count}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-muted-foreground">
-                        {user.unique_tasks}
-                      </td>
-                    </tr>
-                  ))}
+                  {stats.users.map((user) => {
+                    const hasTime = user.total_duration > 0;
+                    const isExpanded = expandedUserId === user.id;
+                    return (
+                      <Fragment key={user.id}>
+                        <tr
+                          className={hasTime ? 'cursor-pointer hover:bg-muted/40 transition-colors' : 'opacity-50'}
+                          onClick={() => toggleUser(user.id, hasTime)}
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center gap-3">
+                              <Avatar
+                                name={user.username}
+                                color={user.color}
+                                avatar={user.profile_picture}
+                                size="sm"
+                              />
+                              <div>
+                                <div className="font-medium text-foreground flex items-center gap-1">
+                                  {user.username}
+                                  {hasTime && (
+                                    <span
+                                      className="text-xs text-muted-foreground transition-transform duration-200"
+                                      style={{ display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none' }}
+                                    >
+                                      ›
+                                    </span>
+                                  )}
+                                </div>
+                                {user.email && (
+                                  <div className="text-sm text-muted-foreground">{user.email}</div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                            <span className={`font-mono font-semibold ${hasTime ? 'text-primary' : 'text-muted-foreground'}`}>
+                              {formatDurationLong(user.total_duration)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-muted-foreground">
+                            {user.entries_count}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-muted-foreground">
+                            {user.unique_tasks}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="bg-muted/20">
+                            <td colSpan={4} className="px-6 py-3">
+                              {loadingTasks[user.id] ? (
+                                <div className="text-sm text-muted-foreground py-2">Ładowanie zadań...</div>
+                              ) : (userTasks[user.id] || []).length === 0 ? (
+                                <div className="text-sm text-muted-foreground py-2">Brak zadań w tym okresie</div>
+                              ) : (
+                                <div className="grid gap-1">
+                                  {(userTasks[user.id] || []).map((task) => (
+                                    <div key={task.task_id} className="flex items-center justify-between py-1 px-2 rounded gap-3">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        {task.list_name && (
+                                          <Badge
+                                            variant="outline"
+                                            className="border-[var(--active-border)] bg-[var(--active-surface)] text-muted-foreground shrink-0 text-xs"
+                                          >
+                                            {task.list_name}
+                                          </Badge>
+                                        )}
+                                        {task.task_url ? (
+                                          <a
+                                            href={task.task_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-sm text-primary hover:underline truncate"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            {task.task_name}
+                                          </a>
+                                        ) : (
+                                          <span className="text-sm text-foreground truncate">{task.task_name}</span>
+                                        )}
+                                      </div>
+                                      <span className="font-mono text-sm text-muted-foreground shrink-0">
+                                        {formatDurationLong(task.total_duration)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                   {stats.users.length === 0 && (
                     <tr>
                       <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">
@@ -635,7 +732,6 @@ type DashboardProps = {
   onToggleTheme: () => void;
 };
 
-// Dashboard component - główna strona z aktywnością
 function Dashboard({ theme, onToggleTheme }: DashboardProps) {
   const { token, logout, user, isAdmin, isPm } = useAuth();
   const [connected, setConnected] = useState(false);
@@ -686,11 +782,9 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
     }
   }, [activeTab]);
 
-  // Socket.io connection - separate effect to avoid reconnections
   useEffect(() => {
     if (!token) return;
 
-    // Połącz z Socket.io z autoryzacją
     const newSocket = io(API_URL || window.location.origin, {
       auth: { token },
     });
@@ -710,17 +804,14 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
       }
     });
 
-    // Początkowe dane
     newSocket.on('active_sessions', (sessions: TimeEntry[]) => {
       setActiveSessions(sessions);
     });
 
-    // Nowa sesja
     newSocket.on('time_entry_started', (entry: TimeEntry) => {
       setActiveSessions((prev) => [entry, ...prev.filter((e) => e.id !== entry.id)]);
     });
 
-    // Zakończona sesja
     newSocket.on('time_entry_stopped', (data: Partial<TimeEntry>) => {
       setActiveSessions((prev) => prev.filter((e) => e.id !== data.id));
       setHistory((prev) => {
@@ -732,7 +823,6 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
       });
     });
 
-    // Aktualizacja sesji
     newSocket.on('time_entry_updated', (data: Partial<TimeEntry>) => {
       setActiveSessions((prev) =>
         prev.map((e) => (e.id === data.id ? { ...e, ...data } : e))
@@ -744,7 +834,6 @@ function Dashboard({ theme, onToggleTheme }: DashboardProps) {
     };
   }, [token, logout]);
 
-  // Fetch history and users - separate effect for data loading
   useEffect(() => {
     if (!token) return;
 
@@ -984,13 +1073,11 @@ type AdminPageProps = {
   onToggleTheme: () => void;
 };
 
-// Admin wrapper component
 function AdminPage({ theme, onToggleTheme }: AdminPageProps) {
   const { logout, user } = useAuth();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
       <header className="bg-card/80 backdrop-blur border-b border-border">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
