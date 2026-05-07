@@ -3,9 +3,12 @@ import { Server } from 'socket.io';
 import { fetchClickUpTask, getClickUpTeamId } from './clickup.js';
 import { emitActiveSessions, emitScopedEvent } from './socket.js';
 import { MAX_ENTRY_DURATION_MS } from './constants.js';
+import { runBackfill } from './backfill.js';
 
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 const POLL_INTERVAL = 30000; // 30 sekund
+const BACKFILL_INTERVAL = 3 * 60 * 60 * 1000; // 3h
+const BACKFILL_DAYS = 2; // ostatnie 2 dni — z zapasem na strefy czasowe
 const TEAM_ID = getClickUpTeamId(); // Team ID (workspace)
 
 interface RunningTimer {
@@ -23,10 +26,9 @@ interface RunningTimer {
     profilePicture: string | null;
   };
   start: string;
-  duration: number; // ujemny = timer aktywny
+  duration: number;
 }
 
-// Rozszerzony timer z info o projekcie (do cache)
 interface CachedTimer extends RunningTimer {
   list_name?: string | null;
   folder_name?: string | null;
@@ -37,7 +39,6 @@ interface TimeEntryResponse {
   data: RunningTimer | null;
 }
 
-// Cache aktywnych sesji żeby wykrywać zmiany (z info o projekcie)
 let activeTimers: Map<string, CachedTimer> = new Map();
 
 async function fetchRunningTimer(): Promise<RunningTimer | null> {
@@ -65,7 +66,6 @@ async function fetchRunningTimer(): Promise<RunningTimer | null> {
   }
 }
 
-// Pobierz aktywne timery dla wszystkich członków zespołu
 async function fetchAllRunningTimers(): Promise<RunningTimer[]> {
   const token = process.env.CLICKUP_API_TOKEN;
   if (!token) {
@@ -73,12 +73,10 @@ async function fetchAllRunningTimers(): Promise<RunningTimer[]> {
     return [];
   }
 
-  // Pobierz listę członków zespołu
   const members = await fetchTeamMembers();
   console.log(`[POLL] Sprawdzam ${members.length} członków zespołu`);
   const runningTimers: RunningTimer[] = [];
 
-  // Odpytaj każdego członka
   for (const member of members) {
     try {
       const url = `${CLICKUP_API}/team/${TEAM_ID}/time_entries/current?assignee=${member.id}`;
@@ -125,25 +123,20 @@ async function fetchTeamMembers(): Promise<Array<{ id: number; username: string 
   }
 }
 
-// Helper: parse date string to milliseconds (handles various formats)
 function parseStartTime(startTime: string): number {
-  // Try ISO format first
   let parsed = new Date(startTime).getTime();
   if (Number.isFinite(parsed)) return parsed;
 
-  // Try adding 'Z' for UTC if missing timezone
   if (!startTime.includes('Z') && !startTime.includes('+')) {
-    // Replace space with 'T' if needed
     const isoLike = startTime.replace(' ', 'T') + 'Z';
     parsed = new Date(isoLike).getTime();
     if (Number.isFinite(parsed)) return parsed;
   }
 
   console.warn(`⚠️ [POLL] Nie można sparsować daty: ${startTime}`);
-  return Date.now(); // Fallback to now (will result in 0 duration)
+  return Date.now();
 }
 
-// Sync cache with database on startup (recover from restart)
 function syncCacheFromDatabase() {
   const activeInDb = db
     .prepare(
@@ -169,7 +162,6 @@ function syncCacheFromDatabase() {
     const startMs = parseStartTime(entry.start_time);
     console.log(`📥 [POLL] Cache: ${entry.user_name} - start_time=${entry.start_time} -> ${startMs}ms`);
 
-    // Convert DB entry to CachedTimer format
     activeTimers.set(entry.id, {
       id: entry.id,
       task: {
@@ -185,7 +177,7 @@ function syncCacheFromDatabase() {
         profilePicture: null,
       },
       start: String(startMs),
-      duration: -1, // Active timer
+      duration: -1,
       list_name: entry.list_name,
       folder_name: entry.folder_name,
       space_name: entry.space_name,
@@ -198,15 +190,24 @@ function syncCacheFromDatabase() {
 export function startPolling(io: Server) {
   console.log('🔄 Polling aktywnych timerów uruchomiony (co 30s)');
 
-  // Sync cache from database first (recover from restart)
   syncCacheFromDatabase();
 
+  // Auto-hide users nieaktywnych w ClickUp team (np. byli pracownicy)
+  const syncHiddenUsers = async () => {
+    const members = await fetchTeamMembers();
+    if (!members.length) return;
+    const activeIds = members.map((m) => String(m.id));
+    const placeholders = activeIds.map(() => '?').join(',');
+    db.prepare(`UPDATE users SET hidden = 0 WHERE id IN (${placeholders})`).run(...activeIds);
+    db.prepare(`UPDATE users SET hidden = 1 WHERE id NOT IN (${placeholders})`).run(...activeIds);
+  };
+
   const poll = async () => {
+    try { await syncHiddenUsers(); } catch (e: any) { console.warn('[POLL] syncHiddenUsers error:', e?.message); }
     const timers = await fetchAllRunningTimers();
     const currentIds = new Set(timers.map((t) => t.id));
     const previousIds = new Set(activeTimers.keys());
 
-    // Nowe aktywne timery
     for (const timer of timers) {
       if (!previousIds.has(timer.id)) {
         console.log(`▶️ [POLL] ${timer.user.username} zaczął: ${timer.task.name}`);
@@ -229,7 +230,6 @@ export function startPolling(io: Server) {
           url: taskUrl,
         });
 
-        // Zapisz do bazy
         const stmt = db.prepare(`
           INSERT INTO time_entries (
             id, task_id, task_name, user_id, user_name, user_email,
@@ -258,7 +258,6 @@ export function startPolling(io: Server) {
           spaceName
         );
 
-        // Emituj do klientów
         emitScopedEvent(io, 'time_entry_started', {
           id: timer.id,
           task_id: timer.task.id,
@@ -275,7 +274,6 @@ export function startPolling(io: Server) {
           space_name: spaceName,
         });
 
-        // Zapisz do cache z info o projekcie
         activeTimers.set(timer.id, {
           ...timer,
           list_name: listName,
@@ -283,7 +281,6 @@ export function startPolling(io: Server) {
           space_name: spaceName,
         });
       } else {
-        // Timer już istniał - zaktualizuj cache (może mieć już list info)
         const existing = activeTimers.get(timer.id);
         if (existing) {
           activeTimers.set(timer.id, { ...existing, ...timer });
@@ -293,20 +290,16 @@ export function startPolling(io: Server) {
       }
     }
 
-    // Timery które się zakończyły (były aktywne, teraz nie ma)
     for (const [id, timer] of activeTimers) {
       if (!currentIds.has(id)) {
         activeTimers.delete(id);
 
-        // Fallback: jeśli webhook nie zadziałał, uzupełnij end_time i duration
         const endTime = new Date().toISOString();
         let startMs = Number.parseInt(timer.start, 10);
 
-        // Debug: log the values
         console.log(`⏹️ [POLL] ${timer.user.username} skończył: ${timer.task.name}`);
         console.log(`   timer.start=${timer.start}, startMs=${startMs}, isFinite=${Number.isFinite(startMs)}`);
 
-        // If start is invalid, try to parse from DB
         if (!Number.isFinite(startMs)) {
           const dbEntry = db.prepare('SELECT start_time FROM time_entries WHERE id = ?').get(id) as { start_time: string } | undefined;
           if (dbEntry?.start_time) {
@@ -328,7 +321,6 @@ export function startPolling(io: Server) {
           WHERE id = ? AND (end_time IS NULL OR end_time = '')
         `).run(endTime, durationMs, timer.id);
 
-        // Webhook powinien zaktualizować bazę, więc tylko emitujemy
         emitScopedEvent(io, 'time_entry_stopped', {
           id: timer.id,
           task_id: timer.task.id,
@@ -344,10 +336,8 @@ export function startPolling(io: Server) {
       }
     }
 
-    // Wyślij aktualną listę aktywnych sesji do wszystkich klientów (z cache, który ma list info)
     const activeSessions = timers.map((t) => {
       const cached = activeTimers.get(t.id);
-      // Prioritize: API url > cached url > generated url
       const taskUrl = t.task.url || cached?.task?.url || `https://app.clickup.com/t/${t.task.id}`;
       return {
         id: t.id,
@@ -369,9 +359,11 @@ export function startPolling(io: Server) {
     emitActiveSessions(io, activeSessions);
   };
 
-  // Pierwsze odpytanie od razu
   poll();
-
-  // Potem co 30 sekund
   setInterval(poll, POLL_INTERVAL);
+
+  // Backfill z ClickUp co 3h (naprawia ucięte wpisy z polling fallbacka)
+  const safeBackfill = () => runBackfill(BACKFILL_DAYS).catch((e: any) => console.warn('🔁 [BACKFILL] error:', e?.message));
+  setTimeout(safeBackfill, 60000); // pierwszy run po 1 min od startu
+  setInterval(safeBackfill, BACKFILL_INTERVAL);
 }
