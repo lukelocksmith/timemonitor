@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
@@ -25,8 +23,6 @@ services:
       - NOTION_VERSION=${NOTION_VERSION:-2022-06-28}
     volumes:
       - activity-data:/app/data
-    networks:
-      - clickup-monitor
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
       interval: 10s
@@ -34,7 +30,16 @@ services:
       retries: 3
       start_period: 15s
     labels:
+      # Kontener moze byc w kilku sieciach Dockera. Bez tej etykiety Traefik wybiera
+      # siec losowo przy kazdym przeladowaniu configu i potrafi trafic w siec, ktorej
+      # coolify-proxy nie widzi -> kazde zapytanie wisi 30 s i konczy sie 504.
+      - "traefik.docker.network=owkkkkgcw000wk84ccs88kc4"
       - "traefik.http.services.backend-owkkkkgcw000wk84ccs88kc4.loadbalancer.server.port=3001"
+      # Aktywny health check: martwy upstream = natychmiastowe 503 zamiast 30 s ciszy,
+      # i automatyczny powrot do ruchu gdy kontener znow odpowiada.
+      - "traefik.http.services.backend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.backend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.backend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.timeout=3s"
 
   frontend:
     build:
@@ -47,8 +52,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    networks:
-      - clickup-monitor
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/"]
       interval: 10s
@@ -56,11 +59,11 @@ services:
       retries: 3
       start_period: 5s
     labels:
+      - "traefik.docker.network=owkkkkgcw000wk84ccs88kc4"
       - "traefik.http.services.frontend-owkkkkgcw000wk84ccs88kc4.loadbalancer.server.port=80"
+      - "traefik.http.services.frontend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.path=/"
+      - "traefik.http.services.frontend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.frontend-owkkkkgcw000wk84ccs88kc4.loadbalancer.healthcheck.timeout=3s"
 
 volumes:
   activity-data:
-
-networks:
-  clickup-monitor:
-    driver: bridge
